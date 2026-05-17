@@ -15,30 +15,86 @@ const FILE_CREATE_TOOLS = new Set([
   "Write", "write", "write_file",
 ]);
 
-// Match exported declarations for symbol annotation
+// ── Language-specific declaration regexes ──
+//
+// Order matters: more specific patterns first, generic fallbacks last.
+
+// TypeScript / JavaScript
 const EXPORT_DECL_RE =
   /^\s*export\s+(?:default\s+)?(?:async\s+)?(?:function|class|type|interface|const|let|enum)\s+(\w+)/;
 
 const TYPE_DECL_RE =
   /^\s*(?:export\s+)?(?:type|interface)\s+(\w+)/;
 
+// Rust — pub fn, pub struct, pub enum, pub trait, pub type, pub const, pub union
+const RUST_DECL_RE =
+  /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?(?:fn|struct|enum|trait|type|const|union)\s+(\w+)/;
+
+// Rust — impl Trait for Type / impl Type
+const RUST_IMPL_RE =
+  /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?impl\s+(?:<[^>]+>\s+)?(\w+)(?:\s+for\s+(\w+))?/;
+
+// Java / Kotlin / C# — class, interface, enum, record
+const JAVA_TYPE_RE =
+  /^\s*(?:(?:public|private|protected)\s+)?(?:abstract\s+|static\s+|final\s+|sealed\s+)?(?:class|interface|enum|@interface|record)\s+(\w+)/;
+
+// Java / Kotlin / C# — public/protected method (returnType methodName())
+const JAVA_METHOD_RE =
+  /^\s*(?:public|protected)\s+(?:static\s+|abstract\s+|final\s+)?(?:\S+(?:\s*\[\])?\s+)(\w+)\s*\(/;
+
+// C / C++ — struct, class, enum, union, typedef
+const C_TYPE_RE =
+  /^\s*(?:typedef\s+)?(?:struct|class|enum|union)\s+(\w+)/;
+
+// C / C++ — function (returnType name() at line start)
+const C_FUNC_RE =
+  /^\s*(?:(?:static|extern|inline|virtual)\s+)?(?:\w+(?:\s*[*&]+\s*)?)+(\w+)\s*\(/;
+
+// Python
 const PY_DECL_RE =
   /^\s*(?:async\s+)?def\s+(\w+)|^\s*class\s+(\w+)/;
 
+// Go — exported functions only (uppercase first char)
 const GO_DECL_RE =
   /^\s*func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)/;
 
-// Parse declaration lines and return name
+/**
+ * Parse a single line of source code to extract a declaration name.
+ * Tries language-specific regexes in priority order.
+ */
 const parseDeclName = (line: string): string | null => {
+  // TypeScript / JavaScript
   let m = line.match(EXPORT_DECL_RE);
   if (m) return m[1];
   m = line.match(TYPE_DECL_RE);
   if (m) return m[1];
+
+  // Rust
+  m = line.match(RUST_DECL_RE);
+  if (m) return m[1];
+  m = line.match(RUST_IMPL_RE);
+  if (m) return m[1];
+
+  // Java / Kotlin / C# (types before methods to avoid 'class' being caught as a method)
+  m = line.match(JAVA_TYPE_RE);
+  if (m) return m[1];
+  m = line.match(JAVA_METHOD_RE);
+  if (m) return m[1];
+
+  // C / C++
+  m = line.match(C_TYPE_RE);
+  if (m) return m[1];
+  m = line.match(C_FUNC_RE);
+  if (m) return m[1];
+
+  // Python
   m = line.match(PY_DECL_RE);
   if (m) return m[1] || m[2];
+
+  // Go — only include exported (uppercase first char)
   m = line.match(GO_DECL_RE);
-  // Go: only include exported (uppercase first char) functions
   if (m && m[1][0] === m[1][0].toUpperCase()) return m[1];
+
   return null;
 };
 

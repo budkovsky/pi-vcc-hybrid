@@ -26,6 +26,11 @@ const TEST_FAIL_RE = /(?:FAIL|✗|✘|×)\s|(\d+)\s+(?:failed|failure|failing)/i
 // Empty grep/search result indicators
 const EMPTY_RESULT_RE = /^(?:No matches? found\.?|No files? matched\.?|0 results?|No results?\.?)$/i;
 
+// Maximum characters of bash output to scan for error patterns.
+// Compiler/test errors almost always appear near the start of output;
+// scanning the full output (potentially megabytes) is unnecessary.
+const BASH_OUTPUT_SCAN_LIMIT = 8_000;
+
 // Priority tags for outstanding context items
 const PRIORITY_ERROR = "[ERROR]";
 const PRIORITY_WARN = "[WARN]";
@@ -69,16 +74,20 @@ const extractOutstandingContext = (blocks: NormalizedBlock[]): string[] => {
     }
 
     // 2. TypeScript compiler errors in bash output
-    if (b.kind === "bash" && TSC_ERROR_RE.test(b.output)) {
-      const tsErrors = b.output.match(new RegExp(TSC_ERROR_RE.source, "g"))?.slice(0, 3);
-      if (tsErrors) {
-        for (const e of tsErrors) push(`[tsc] ${clip(e, 150)}`);
+    // Scan only the first BASH_OUTPUT_SCAN_LIMIT chars — errors appear at start of output
+    if (b.kind === "bash" && b.output) {
+      const outputHead = b.output.slice(0, BASH_OUTPUT_SCAN_LIMIT);
+      if (TSC_ERROR_RE.test(outputHead)) {
+        const tsErrors = outputHead.match(new RegExp(TSC_ERROR_RE.source, "g"))?.slice(0, 3);
+        if (tsErrors) {
+          for (const e of tsErrors) push(`[tsc] ${clip(e, 150)}`);
+        }
+        continue;
       }
-      continue;
     }
 
     // 3. Test failures in bash output
-    if (b.kind === "bash" && TEST_FAIL_RE.test(b.output)) {
+    if (b.kind === "bash" && b.output && TEST_FAIL_RE.test(b.output.slice(0, BASH_OUTPUT_SCAN_LIMIT))) {
       push(`[tests] ${firstLine(b.output, 150)}`);
       continue;
     }
