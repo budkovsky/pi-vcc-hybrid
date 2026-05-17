@@ -26,9 +26,10 @@ const EXPORT_DECL_RE =
 const TYPE_DECL_RE =
   /^\s*(?:export\s+)?(?:type|interface)\s+(\w+)/;
 
-// Rust — pub fn, pub struct, pub enum, pub trait, pub type, pub const, pub union
+// Rust / Zig — pub fn, pub struct, pub enum, pub trait, pub type, pub const, pub union, pub var
+// Zig uses the same keywords as Rust for declarations plus `var` for mutable globals.
 const RUST_DECL_RE =
-  /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?(?:fn|struct|enum|trait|type|const|union)\s+(\w+)/;
+  /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?(?:fn|struct|enum|trait|type|const|union|var)\s+(\w+)/;
 
 // Rust — impl Trait for Type / impl Type
 const RUST_IMPL_RE =
