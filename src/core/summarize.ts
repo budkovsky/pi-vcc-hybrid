@@ -3,15 +3,26 @@ import type { FileOps } from "../types";
 import { normalize } from "./normalize";
 import { filterNoise } from "./filter-noise";
 import { buildSections } from "./build-sections";
-import { formatSummary, capBrief, RECALL_NOTE, wrapLongLines } from "./format";
+import { formatSummary, capBrief, RECALL_NOTE, wrapLongLines, type SummaryMetadata } from "./format";
 
 export interface CompileInput {
   messages: Message[];
   previousSummary?: string;
   fileOps?: FileOps;
+  /** Metadata for the summary footer (timestamp, compression ratio, etc.) */
+  metadata?: SummaryMetadata;
 }
 
-const HEADER_NAMES = ["Session Goal", "Files And Changes", "Type Catalog", "Commits", "Outstanding Context", "User Preferences"];
+// Cache-friendly order: stable sections first, volatile sections last
+const HEADER_NAMES = [
+  "Session Goal",
+  "User Preferences",
+  "Files And Changes",
+  "Commits",
+  "Type Catalog",
+  "Outstanding Context",
+  "Current Status",
+];
 
 const SEPARATOR = "\n\n---\n\n";
 
@@ -41,8 +52,8 @@ const briefOf = (text: string): string => {
 
 /** Merge a header section */
 const mergeHeaderSection = (header: string, prev: string, fresh: string): string => {
-  // Outstanding Context and Type Catalog are volatile -- always use fresh only
-  if (header === "Outstanding Context" || header === "Type Catalog") return fresh;
+  // Outstanding Context, Type Catalog, and Current Status are volatile -- always use fresh only
+  if (header === "Outstanding Context" || header === "Type Catalog" || header === "Current Status") return fresh;
   if (!prev) return fresh;
   if (!fresh) return prev;
 
@@ -140,7 +151,7 @@ const mergePrevious = (prev: string, fresh: string): string => {
 export const compile = (input: CompileInput): string => {
   const blocks = filterNoise(normalize(input.messages));
   const data = buildSections({ blocks });
-  const fresh = formatSummary(data);
+  const fresh = formatSummary(data, input.metadata);
   // Strip any legacy RECALL_NOTE baked into prev summary (pre-fix format)
   // so merge doesn't re-stack it inside the brief.
   const prev = input.previousSummary

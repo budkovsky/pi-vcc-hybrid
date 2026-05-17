@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { writeFileSync } from "fs";
-import { compile } from "../core/summarize";
+import { compile, type CompileInput } from "../core/summarize";
 import { loadSettings, type PiVccSettings } from "../core/settings";
 import type { PiVccCompactionDetails } from "../details";
 
@@ -20,6 +20,53 @@ export const getLastCompactionStats = () => lastStats;
 const formatTokens = (n: number): string => {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   return String(n);
+};
+
+/** Compute global message indices [start, end] for summarized messages. */
+const computeMessageRange = (
+  branchEntries: any[],
+  messagesToSummarize: any[],
+  firstKeptEntryId: string,
+): [number, number] | undefined => {
+  // Build a map of entry id -> global message index
+  let globalIdx = 0;
+  const idToGlobal = new Map<string, number>();
+  for (const e of branchEntries) {
+    if (e.type === "message" && e.message) {
+      idToGlobal.set(e.id, globalIdx);
+      globalIdx++;
+    }
+  }
+
+  // Find the global index range of summarized messages
+  let startMsgIdx: number | undefined;
+  let endMsgIdx: number | undefined;
+
+  for (const msg of messagesToSummarize) {
+    // Match by content identity — iterate branch entries to find the matching message
+    // We match on role + content hash since we don't have entry ids in messagesToSummarize
+  }
+
+  // Better approach: use messageToEntryId mapping from buildOwnCut
+  // messagesToSummarize were extracted from liveMessages which had entry.id
+  // But buildOwnCut returns only message objects, not entry ids.
+  //
+  // We need to re-derive the range from firstKeptEntryId:
+  // - If firstKeptEntryId is "" (compact-all), range is all messages up to last
+  // - Otherwise, range is from first message up to (firstKeptEntryId - 1)
+
+  if (!firstKeptEntryId) return undefined;
+
+  if (firstKeptEntryId === "") {
+    // Compact-all: all messages are summarized
+    const keptGlobalId = idToGlobal.size - 1; // last message
+    return [0, keptGlobalId >= 0 ? keptGlobalId : 0];
+  }
+
+  const cutGlobalIdx = idToGlobal.get(firstKeptEntryId);
+  if (cutGlobalIdx === undefined || cutGlobalIdx <= 0) return undefined;
+
+  return [0, cutGlobalIdx - 1];
 };
 
 const dbg = (settings: PiVccSettings, data: Record<string, unknown>) => {
@@ -241,14 +288,35 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
 
     const config = settings;
 
-    const summary = compile({
+    // Compute global message range for vcc_recall scope targeting
+    const messageRange = computeMessageRange(
+      branchEntries as any[],
+      agentMessages,
+      firstKeptEntryId,
+    );
+
+    const compileInput: CompileInput = {
       messages,
       previousSummary: preparation.previousSummary,
       fileOps: {
         readFiles: [...preparation.fileOps.read],
         modifiedFiles: [...preparation.fileOps.written, ...preparation.fileOps.edited],
       },
-    });
+    };
+
+    // Attach metadata footer if we have the required info
+    if (preparation.tokensBefore && lastStats) {
+      compileInput.metadata = {
+        timestamp: new Date().toISOString(),
+        sourceMessageCount: agentMessages.length,
+        tokensBefore: preparation.tokensBefore,
+        keptCount: lastStats.kept,
+        keptTokensEst: lastStats.keptTokensEst,
+        messageRange,
+      };
+    }
+
+    const summary = compile(compileInput);
 
     const branchIds = branchEntries.map((e: any) => e.id);
     const cutIdx = branchIds.indexOf(firstKeptEntryId);
@@ -268,6 +336,7 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
       messagesPreviewTail: agentMessages.slice(-3).map((m: any) => ({ role: m.role, preview: previewContent(m.content) })),
       convertedMessages: messages.length,
       firstKeptEntryId,
+      messageRange,
       cutWindow,
       tokensBefore: preparation.tokensBefore,
       summaryLength: summary.length,
@@ -275,12 +344,17 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
       sections: [...summary.matchAll(/^\[(.+?)\]/gm)].map((m) => m[1]),
     });
 
+    const sections = [...summary.matchAll(/^\[(.+?)\]/gm)].map((m) => m[1]);
     const details: PiVccCompactionDetails = {
       compactor: "pi-vcc",
       version: 1,
-      sections: [...summary.matchAll(/^\[(.+?)\]/gm)].map((m) => m[1]),
+      sections,
       sourceMessageCount: agentMessages.length,
       previousSummaryUsed: Boolean(preparation.previousSummary),
+      messageRange,
+      compressionRatio: preparation.tokensBefore > 0
+        ? Math.round(preparation.tokensBefore / Math.max(1, agentMessages.length))
+        : undefined,
     };
 
     lastCompactWasPiVcc = isPiVcc;

@@ -1,10 +1,12 @@
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { readFileSync } from "fs";
 import { loadAllMessages } from "../core/load-messages";
 import { searchEntries } from "../core/search-entries";
 import { formatRecallOutput } from "../core/format-recall";
 import { getActiveLineageEntryIds } from "../core/lineage";
 import { normalizeRecallScope } from "../core/recall-scope";
+import type { PiVccCompactionDetails } from "../details";
 
 const DEFAULT_RECENT = 25;
 const PAGE_SIZE = 5;
@@ -12,15 +14,59 @@ const PAGE_SIZE = 5;
 export const invalidExpandIndices = (requested: number[], available: Set<number>): number[] =>
   requested.filter((i) => !Number.isInteger(i) || !available.has(i));
 
+/**
+ * Read the session file, find compaction entries, and resolve the
+ * message range for a given compaction index (0-based).
+ * Returns [startIndex, endIndex] or undefined if not found.
+ */
+const resolveCompactionMessageRange = (
+  sessionFile: string,
+  scopeStr: string,
+): [number, number] | undefined => {
+  const isLatest = scopeStr === "compaction:latest";
+  const targetIndex = isLatest
+    ? -1
+    : parseInt(scopeStr.replace("compaction:", ""), 10);
+  if (isNaN(targetIndex) && !isLatest) return undefined;
+
+  const content = readFileSync(sessionFile, "utf-8");
+  const entries: any[] = [];
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      entries.push(JSON.parse(line));
+    } catch {
+      /* skip malformed lines */
+    }
+  }
+
+  // Collect compaction entries in order
+  const compactions = entries.filter(
+    (e: any) => e.type === "compaction" && e.details?.compactor === "pi-vcc",
+  );
+
+  if (compactions.length === 0) return undefined;
+
+  const target = isLatest
+    ? compactions[compactions.length - 1]
+    : compactions[targetIndex];
+
+  if (!target?.details?.messageRange) return undefined;
+  return target.details.messageRange as [number, number];
+};
+
 export const registerRecallTool = (pi: ExtensionAPI) => {
   pi.registerTool({
     name: "vcc_recall",
     label: "VCC Recall",
     description:
       "Search session history. Defaults to active lineage; use scope:'all' to include off-lineage branches." +
-      " Supports regex queries, paging, and expand indices.",
+      " Supports regex queries, paging, and expand indices. " +
+      "Use scope:'compaction:N' to search within a specific compaction's message range.",
     promptSnippet:
-      "vcc_recall: Search history; default scope is active lineage. Use scope:'all' for off-lineage branches.",
+      "vcc_recall: Search history; default scope is active lineage. " +
+      "Use scope:'all' for off-lineage branches. " +
+      "Use scope:'compaction:N' or scope:'compaction:latest' for targeted search within a compaction segment.",
     parameters: Type.Object({
       query: Type.Optional(
         Type.String({ description: "Search terms or regex pattern (e.g. 'hook|inject', 'fail.*build'). Multi-word = OR ranked by relevance." }),
@@ -32,10 +78,7 @@ export const registerRecallTool = (pi: ExtensionAPI) => {
         Type.Number({ description: "Page number (1-based) for paginated search results. Default: 1." }),
       ),
       scope: Type.Optional(
-        Type.Union([
-          Type.Literal("lineage"),
-          Type.Literal("all"),
-        ], { description: "Search scope. Default: lineage; all includes off-lineage branches." }),
+        Type.String({ description: "Search scope. Options: 'lineage' (default), 'all' (entire session), 'compaction:N' (within compaction #N), 'compaction:latest' (most recent compaction segment)." }),
       ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -47,34 +90,54 @@ export const registerRecallTool = (pi: ExtensionAPI) => {
         };
       }
 
-      const scope = normalizeRecallScope(params.scope);
-      const lineageEntryIds = scope === "lineage"
+      const rawScope = normalizeRecallScope(params.scope);
+      const scopeStr = String(params.scope ?? "").toLowerCase();
+      const isCompactionScope = scopeStr.startsWith("compaction:");
+
+      // Resolve compaction-scoped message range
+      let entryFilter: ((idx: number) => boolean) | undefined;
+      let scopeLabel = "";
+
+      if (isCompactionScope) {
+        const range = resolveCompactionMessageRange(sessionFile, scopeStr);
+        if (!range) {
+          return {
+            content: [{ type: "text", text: `No compaction found for scope: ${scopeStr}. Use scope:'lineage' (default) or scope:'all'.` }],
+            details: undefined,
+          };
+        }
+        const [start, end] = range;
+        entryFilter = (idx: number) => idx >= start && idx <= end;
+        scopeLabel = ` (scope: ${scopeStr}, messages [#${start}, #${end}])`;
+      }
+
+      const lineageEntryIds = rawScope === "lineage"
         ? getActiveLineageEntryIds(ctx.sessionManager)
         : undefined;
       const expandSet = new Set(params.expand ?? []);
       const hasExpand = expandSet.size > 0;
 
       if (hasExpand && !params.query) {
-        const { rendered: fullMsgs } = loadAllMessages(sessionFile, true, lineageEntryIds);
+        const { rendered: fullMsgs } = loadAllMessages(sessionFile, true, lineageEntryIds, entryFilter);
         const requested = [...expandSet];
         const byIndex = new Map(fullMsgs.map((m) => [m.index, m]));
         const invalid = invalidExpandIndices(requested, new Set(byIndex.keys()));
         if (invalid.length > 0) {
           return {
-            content: [{ type: "text", text: `Cannot expand indices outside ${scope === "all" ? "session history" : "active lineage"}: ${invalid.join(", ")}` }],
+            content: [{ type: "text", text: `Cannot expand indices outside ${rawScope === "all" ? "session history" : "active lineage"}${scopeLabel}: ${invalid.join(", ")}` }],
             details: undefined,
           };
         }
 
         const expanded = requested.map((i) => byIndex.get(i)).filter((m): m is NonNullable<typeof m> => Boolean(m));
-        const output = (scope === "all" ? "Scope: all\n\n" : "") + formatRecallOutput(expanded);
+        const output = (scopeLabel || (rawScope === "all" ? "Scope: all" : "")) + "\n" + formatRecallOutput(expanded);
         return {
           content: [{ type: "text", text: output }],
           details: undefined,
         };
       }
 
-      const { rendered: msgs, rawMessages } = loadAllMessages(sessionFile, false, lineageEntryIds);
+      const { rendered: msgs, rawMessages } = loadAllMessages(sessionFile, false, lineageEntryIds, entryFilter);
       const allResults = params.query?.trim()
         ? searchEntries(msgs, rawMessages, params.query)
         : msgs.slice(-DEFAULT_RECENT);
@@ -84,12 +147,11 @@ export const registerRecallTool = (pi: ExtensionAPI) => {
         const start = (page - 1) * PAGE_SIZE;
         const pageResults = allResults.slice(start, start + PAGE_SIZE);
         const totalPages = Math.ceil(allResults.length / PAGE_SIZE);
-        const scopeSuffix = scope === "all" ? " (scope: all)" : "";
         const header = totalPages > 1
-          ? `Page ${page}/${totalPages} (${allResults.length} total matches${scopeSuffix})`
-          : `${allResults.length} matches${scopeSuffix}`;
+          ? `Page ${page}/${totalPages} (${allResults.length} total matches${scopeLabel})`
+          : `${allResults.length} matches${scopeLabel}`;
         const footer = page < totalPages
-          ? `\n--- Use page:${page + 1}${scope === "all" ? " with scope:'all'" : ""} for more results ---`
+          ? `\n--- Use page:${page + 1}${scopeLabel ? "" : rawScope === "all" ? " with scope:'all'" : ""} for more results ---`
           : "";
         const output = formatRecallOutput(pageResults, params.query, header) + footer;
         return {
@@ -98,7 +160,7 @@ export const registerRecallTool = (pi: ExtensionAPI) => {
         };
       }
 
-      const output = (scope === "all" ? "Scope: all\n\n" : "") + formatRecallOutput(allResults, params.query);
+      const output = (scopeLabel || (rawScope === "all" ? "Scope: all" : "")) + "\n" + formatRecallOutput(allResults, params.query);
       return {
         content: [{ type: "text", text: output }],
         details: undefined,

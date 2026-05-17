@@ -12,6 +12,8 @@ export const loadAllMessages = (
   sessionFile: string,
   full: boolean,
   allowedEntryIds?: Set<string>,
+  /** Optional filter by global message index (for compaction-scoped searches) */
+  entryFilter?: (globalIndex: number) => boolean,
 ): LoadedMessages => {
   const content = readFileSync(sessionFile, "utf-8");
   const entries: any[] = [];
@@ -28,7 +30,8 @@ export const loadAllMessages = (
     const isMessage = e.type === "message" && e.message;
     if (!isMessage) continue;
 
-    const allowed = !allowedEntryIds || allowedEntryIds.has(e.id);
+    const allowed = (!allowedEntryIds || allowedEntryIds.has(e.id)) &&
+      (!entryFilter || entryFilter(messageIndex));
     if (allowed) {
       rendered.push(renderMessage(e.message, messageIndex, full));
       rawMessages.push(e.message);

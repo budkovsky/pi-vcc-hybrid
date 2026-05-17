@@ -11,6 +11,8 @@ export interface SectionData {
   typeCatalog: string[];
   /** Symbol-level changes (function/type/class names per file) */
   symbolChanges: SymbolRef[];
+  /** Current working context: what's being worked on, last action, next steps */
+  currentStatus: string[];
   briefTranscript: string;
   /** Structured transcript entries (verbose object format) */
   transcriptEntries: TranscriptEntry[];

@@ -2,6 +2,7 @@ import type { NormalizedBlock } from "../types";
 import { clip, clipSentence, firstLine, nonEmptyLines } from "./content";
 import type { SectionData } from "../sections";
 import { extractGoals } from "../extract/goals";
+import { extractPath } from "./tool-args";
 import { extractFiles } from "../extract/files";
 import { extractPreferences, dedupPreferencesAgainstGoals } from "../extract/preferences";
 import { extractCommits, formatCommits } from "../extract/commits";
@@ -24,6 +25,23 @@ const TEST_FAIL_RE = /(?:FAIL|✗|✘|×)\s|(\d+)\s+(?:failed|failure|failing)/i
 
 // Empty grep/search result indicators
 const EMPTY_RESULT_RE = /^(?:No matches? found\.?|No files? matched\.?|0 results?|No results?\.?)$/i;
+
+// Priority tags for outstanding context items
+const PRIORITY_ERROR = "[ERROR]";
+const PRIORITY_WARN = "[WARN]";
+const PRIORITY_INFO = "[INFO]";
+
+/** Prepend a priority tag based on the error type and exit code. */
+const priorityTag = (item: string): string => {
+  if (/^\[tsc\]/.test(item)) return `${PRIORITY_ERROR} ${item}`;
+  if (/^\[bash:exit [1-9]\d*\]/.test(item)) return `${PRIORITY_ERROR} ${item}`;
+  if (/^\[tests\]/.test(item)) return `${PRIORITY_WARN} ${item}`;
+  if (/^\[no matches\]/.test(item)) return `${PRIORITY_INFO} ${item}`;
+  if (/^\[user\]/.test(item)) return `${PRIORITY_WARN} ${item}`;
+  // Generic tool errors
+  if (/^\[\w+\]/.test(item)) return `${PRIORITY_ERROR} ${item}`;
+  return `${PRIORITY_WARN} ${item}`;
+};
 
 const extractOutstandingContext = (blocks: NormalizedBlock[]): string[] => {
   const items: string[] = [];
@@ -120,7 +138,7 @@ const extractOutstandingContext = (blocks: NormalizedBlock[]): string[] => {
     }
   }
 
-  return items.slice(0, 8);
+  return items.slice(0, 8).map(priorityTag);
 };
 
 const formatFileActivity = (blocks: NormalizedBlock[]): string[] => {
@@ -169,6 +187,51 @@ const formatFileActivity = (blocks: NormalizedBlock[]): string[] => {
   return lines;
 };
 
+/**
+ * Extract current working status from the tail of the conversation.
+ * Returns up to 3 lines: current focus, last action, next steps.
+ */
+const extractCurrentStatus = (blocks: NormalizedBlock[]): string[] => {
+  const items: string[] = [];
+  const tail = blocks.slice(-20);
+
+  // 1. Current focus: last substantive user message
+  for (let i = tail.length - 1; i >= 0; i--) {
+    const b = tail[i];
+    if (b.kind === "user" && b.text.trim().length > 10) {
+      items.push(`Working on: ${clip(b.text.trim(), 120)}`);
+      break;
+    }
+  }
+
+  // 2. Last action: last tool call that modified/read a file
+  for (let i = tail.length - 1; i >= 0; i--) {
+    const b = tail[i];
+    if (b.kind === "tool_call") {
+      const path = extractPath(b.args);
+      if (path) {
+        const cmd = b.name.length > 80 ? `${b.name.slice(0, 77)}...` : b.name;
+        items.push(`Last action: ${cmd} "${clip(path, 80)}"`);
+        break;
+      }
+    }
+  }
+
+  // 3. Next steps: last agent text that mentions what to do next
+  for (let i = tail.length - 1; i >= 0; i--) {
+    const b = tail[i];
+    if (b.kind === "assistant" && b.text.trim().length > 20) {
+      const nextMatch = b.text.match(/(?:next|remaining|todo|still need|what.*left|following)/i);
+      if (nextMatch) {
+        items.push(`Next: ${clip(b.text.trim(), 120)}`);
+        break;
+      }
+    }
+  }
+
+  return items.slice(0, 3);
+};
+
 export const buildSections = (input: BuildSectionsInput): SectionData => {
   const { blocks } = input;
   const briefSections = buildBriefSections(blocks);
@@ -188,6 +251,7 @@ export const buildSections = (input: BuildSectionsInput): SectionData => {
     userPreferences,
     typeCatalog,
     symbolChanges,
+    currentStatus: extractCurrentStatus(blocks),
     briefTranscript: stringifyBrief(briefSections),
     transcriptEntries: sectionsToTranscript(briefSections),
   };
