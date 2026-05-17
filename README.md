@@ -1,7 +1,5 @@
 # pi-vcc
 
-[![npm](https://img.shields.io/npm/v/@sting8k/pi-vcc)](https://www.npmjs.com/package/@sting8k/pi-vcc)
-
 Algorithmic conversation compactor for [Pi](https://github.com/badlogic/pi-mono). No LLM calls — produces a brief transcript via extraction and formatting.
 
 Inspired by [VCC](https://github.com/lllyasviel/VCC) **(View-oriented Conversation Compiler)**.
@@ -58,19 +56,13 @@ Measured on real session JSONLs under `~/.pi/agent/sessions` (chars = rendered m
 ## Install
 
 ```bash
-pi install npm:@sting8k/pi-vcc
-```
-
-Or from GitHub:
-
-```bash
-pi install https://github.com/sting8k/pi-vcc
+pi install https://github.com/monotykamary/pi-vcc@tom
 ```
 
 Or try without installing:
 
 ```bash
-pi -e https://github.com/sting8k/pi-vcc
+pi -e https://github.com/monotykamary/pi-vcc@tom
 ```
 
 ## Usage
