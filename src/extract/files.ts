@@ -1,11 +1,6 @@
-import type { FileOps, NormalizedBlock } from "../types";
+import type { NormalizedBlock } from "../types";
 import { extractPath } from "../core/tool-args";
-
-interface FileActivity {
-  read: Set<string>;
-  modified: Set<string>;
-  created: Set<string>;
-}
+import { clip } from "../core/content";
 
 const FILE_READ_TOOLS = new Set([
   "Read", "read_file", "View",
@@ -19,6 +14,40 @@ const FILE_WRITE_TOOLS = new Set([
 const FILE_CREATE_TOOLS = new Set([
   "Write", "write", "write_file",
 ]);
+
+// Match exported declarations for symbol annotation
+const EXPORT_DECL_RE =
+  /^\s*export\s+(?:default\s+)?(?:async\s+)?(?:function|class|type|interface|const|let|enum)\s+(\w+)/;
+
+const TYPE_DECL_RE =
+  /^\s*(?:export\s+)?(?:type|interface)\s+(\w+)/;
+
+const PY_DECL_RE =
+  /^\s*(?:async\s+)?def\s+(\w+)|^\s*class\s+(\w+)/;
+
+const GO_DECL_RE =
+  /^\s*func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)/;
+
+// Parse declaration lines and return name
+const parseDeclName = (line: string): string | null => {
+  let m = line.match(EXPORT_DECL_RE);
+  if (m) return m[1];
+  m = line.match(TYPE_DECL_RE);
+  if (m) return m[1];
+  m = line.match(PY_DECL_RE);
+  if (m) return m[1] || m[2];
+  m = line.match(GO_DECL_RE);
+  // Go: only include exported (uppercase first char) functions
+  if (m && m[1][0] === m[1][0].toUpperCase()) return m[1];
+  return null;
+};
+
+interface FileActivity {
+  read: Set<string>;
+  modified: Set<string>;
+  created: Set<string>;
+  symbols: Map<string, string[]>; // filePath -> [symbol names]
+}
 
 /**
  * Find the longest common directory prefix among absolute paths.
@@ -48,6 +77,58 @@ const trimPaths = (set: Set<string>, prefix: string): Set<string> => {
   return out;
 };
 
+const trimMapKeys = (map: Map<string, string[]>, prefix: string): Map<string, string[]> => {
+  if (!prefix) return map;
+  const out = new Map<string, string[]>();
+  for (const [k, v] of map) {
+    out.set(k.startsWith(prefix) ? k.slice(prefix.length) : k, v);
+  }
+  return out;
+};
+
+// Extract exported symbol names from tool results that follow a Read/Edit/Write call
+const extractSymbolsFromResult = (blocks: NormalizedBlock[], callIndex: number): string[] => {
+  let resultText: string | null = null;
+  for (let j = callIndex + 1; j < Math.min(blocks.length, callIndex + 3); j++) {
+    const r = blocks[j];
+    if (r.kind === "tool_result") {
+      if (r.text && !r.isError) resultText = r.text;
+      break;
+    }
+  }
+  if (!resultText) return [];
+
+  const names: string[] = [];
+  const seen = new Set<string>();
+  const lines = resultText.split("\n").slice(0, 200);
+  for (const line of lines) {
+    const name = parseDeclName(line);
+    if (name && !seen.has(name)) {
+      seen.add(name);
+      names.push(name);
+    }
+  }
+  return names;
+};
+
+// Extract symbols from Edit newText/Write content args
+const extractSymbolsFromArgs = (args: Record<string, unknown>): string[] => {
+  const newText = (args.newText ?? args.new_text ?? args.content ?? "") as string;
+  if (!newText || typeof newText !== "string") return [];
+
+  const names: string[] = [];
+  const seen = new Set<string>();
+  const lines = newText.split("\n").slice(0, 100);
+  for (const line of lines) {
+    const name = parseDeclName(line);
+    if (name && !seen.has(name)) {
+      seen.add(name);
+      names.push(name);
+    }
+  }
+  return names;
+};
+
 export const extractFiles = (
   blocks: NormalizedBlock[],
   fileOps?: FileOps,
@@ -56,16 +137,43 @@ export const extractFiles = (
     read: new Set(fileOps?.readFiles ?? []),
     modified: new Set(fileOps?.modifiedFiles ?? []),
     created: new Set(fileOps?.createdFiles ?? []),
+    symbols: new Map(),
   };
 
-  for (const b of blocks) {
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i];
     if (b.kind !== "tool_call") continue;
     const p = extractPath(b.args);
     if (!p) continue;
 
-    if (FILE_READ_TOOLS.has(b.name)) act.read.add(p);
-    if (FILE_WRITE_TOOLS.has(b.name)) act.modified.add(p);
-    if (FILE_CREATE_TOOLS.has(b.name)) act.created.add(p);
+    const isRead = FILE_READ_TOOLS.has(b.name);
+    const isWrite = FILE_WRITE_TOOLS.has(b.name);
+    const isCreate = FILE_CREATE_TOOLS.has(b.name);
+
+    if (isRead) act.read.add(p);
+    if (isWrite) act.modified.add(p);
+    if (isCreate) act.created.add(p);
+
+    // Extract symbols for modified and read files
+    if (isRead || isWrite) {
+      if (!act.symbols.has(p)) act.symbols.set(p, []);
+
+      // From Edit/Write args
+      if (isWrite) {
+        const fromArgs = extractSymbolsFromArgs(b.args);
+        const existing = act.symbols.get(p)!;
+        for (const name of fromArgs) {
+          if (!existing.includes(name)) existing.push(name);
+        }
+      }
+
+      // From Read/Edit tool results
+      const fromResult = extractSymbolsFromResult(blocks, i);
+      const existing = act.symbols.get(p)!;
+      for (const name of fromResult) {
+        if (!existing.includes(name)) existing.push(name);
+      }
+    }
   }
 
   const all = [...act.read, ...act.modified, ...act.created];
@@ -74,6 +182,7 @@ export const extractFiles = (
     act.read = trimPaths(act.read, prefix);
     act.modified = trimPaths(act.modified, prefix);
     act.created = trimPaths(act.created, prefix);
+    act.symbols = trimMapKeys(act.symbols, prefix);
   }
 
   return act;

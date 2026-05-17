@@ -54,6 +54,7 @@ export const formatSummary = (data: SectionData): string => {
   const headerParts = [
     section("Session Goal", data.sessionGoal),
     section("Files And Changes", data.filesAndChanges),
+    section("Type Catalog", data.typeCatalog),
     section("Commits", data.commits),
     section("Outstanding Context", data.outstandingContext),
     section("User Preferences", data.userPreferences),

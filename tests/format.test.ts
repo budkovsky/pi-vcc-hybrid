@@ -8,6 +8,8 @@ const empty: SectionData = {
   filesAndChanges: [],
   commits: [],
   userPreferences: [],
+  typeCatalog: [],
+  symbolChanges: [],
   briefTranscript: "",
   transcriptEntries: [],
 };

@@ -11,7 +11,7 @@ export interface CompileInput {
   fileOps?: FileOps;
 }
 
-const HEADER_NAMES = ["Session Goal", "Files And Changes", "Commits", "Outstanding Context", "User Preferences"];
+const HEADER_NAMES = ["Session Goal", "Files And Changes", "Type Catalog", "Commits", "Outstanding Context", "User Preferences"];
 
 const SEPARATOR = "\n\n---\n\n";
 
@@ -41,8 +41,8 @@ const briefOf = (text: string): string => {
 
 /** Merge a header section */
 const mergeHeaderSection = (header: string, prev: string, fresh: string): string => {
-  // Outstanding Context is volatile -- always use fresh only
-  if (header === "Outstanding Context") return fresh;
+  // Outstanding Context and Type Catalog are volatile -- always use fresh only
+  if (header === "Outstanding Context" || header === "Type Catalog") return fresh;
   if (!prev) return fresh;
   if (!fresh) return prev;
 
@@ -69,12 +69,15 @@ const mergeFileLines = (prev: string, fresh: string): string => {
   for (const cat of categories) merged[cat] = new Set();
 
   // Parse "- Modified: a, b, c (+N more)" lines from both prev and fresh
+  // Also handle symbol-annotated format: "- Modified: a (fn1, fn2), b"
   for (const text of [prev, fresh]) {
     for (const line of text.split("\n")) {
       for (const cat of categories) {
         const prefix = `- ${cat}: `;
         if (!line.startsWith(prefix)) continue;
         let rest = line.slice(prefix.length);
+        // Strip symbol annotations like " (fn1, fn2)" from each path
+        rest = rest.replace(/\s*\([^)]*\)/g, "");
         // Strip "(+N more)" suffix
         rest = rest.replace(/\s*\(\+\d+ more\)\s*$/, "");
         for (const p of rest.split(",")) {

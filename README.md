@@ -21,7 +21,8 @@ Inspired by [VCC](https://github.com/lllyasviel/VCC) **(View-oriented Conversati
 | **History after compaction** | Gone — agent only sees summary | Active lineage searchable via `vcc_recall` (`scope:"all"` available) |
 | **Repeated compactions** | Each rewrite risks losing more | Sections merge and accumulate |
 | **Cost** | Burns tokens on summarization call | Zero — no API calls |
-| **Structure** | Free-form prose | Brief transcript + 4 semantic sections |
+| **Structure** | Free-form prose | Brief transcript + 6 semantic sections |
+| **Code awareness** | None (summarizes text only) | Symbol-annotated files, type catalog, deep error extraction |
 
 ### Real session metrics
 
@@ -41,7 +42,7 @@ Measured on real session JSONLs under `~/.pi/agent/sessions` (chars = rendered m
 
 - **No LLM** — purely algorithmic, zero extra API cost
 - **Brief transcript** — chronological conversation flow, each tool call collapsed to a one-liner with `(#N)` refs, text truncated to keep it compact
-- **5 semantic sections** — session goal, files & changes, commits, outstanding context, user preferences
+- **6 semantic sections** — session goal, files & changes, type catalog, commits, outstanding context, user preferences
 - **Bounded merge** — rolling sections re-capped after merge instead of growing unbounded
 - **Lossless recall** — `vcc_recall` reads raw session JSONL, so active-lineage history stays searchable across compactions
 - **Scoped recall** — default search is active lineage; use `scope:"all"` / `scope:all` to intentionally search across all lineages
@@ -93,28 +94,48 @@ Pi splits the conversation at the **last user message**. Everything after — th
 - Also update the session token refresh logic
 
 [Files And Changes]
-- Modified: src/auth/session.ts
+- Modified: src/auth/session.ts (refreshToken, verifyToken, Session)
+- Read: src/types.ts (User, AuthPayload)
 - Created: tests/auth-refresh.test.ts
+
+[Type Catalog]
+- src/auth/session.ts [modified]:
+  export function refreshToken(token: string): Promise<Session>
+  export function verifyToken(token: string): Promise<User>
+  export interface Session {
+- src/types.ts [read]:
+  export interface User {
+  export type AuthPayload = {
 
 [Commits]
 - a1b2c3d: fix(auth): refresh token after password reset
 
 [Outstanding Context]
-- lint check still failing on line 42
+- [no matches] grep "verifyCredentials"
+- [bash:exit 1] bun test tests/auth.test.ts → 3 tests failed
+- [tsc] src/session.ts(5,18): error TS2304: Cannot find name 'authenticateUser'
 
 [User Preferences]
 - Prefer Vietnamese responses
 - Always run tests before committing
+
+---
 
 [user]
 Fix the auth bug, users can't log in after password reset
 
 [assistant]
 Root cause is a missing token refresh after password reset...
-* bash "bun test tests/auth.test.ts" (#12)
-* edit "src/auth/session.ts" (#14)
-* bash "bun test tests/auth.test.ts" (#16)
+* Read "src/auth/session.ts" (#3)
+* Read "src/types.ts" (#5)
+* Edit "src/auth/session.ts" (#7)
+* bash "bun test tests/auth.test.ts" (#9)
 ...(28 earlier lines omitted)
+
+---
+
+Use `vcc_recall` to search for prior work, decisions, and context from before this summary.
+Do not redo work already completed.
 ```
 
 Sections appear only when relevant — a session with no git commits won't have `[Commits]`.
@@ -124,17 +145,50 @@ Sections appear only when relevant — a session with no git commits won't have 
 | Section | Description |
 |---|---|
 | `[Session Goal]` | Initial goal + scope changes (regex-based extraction) |
-| `[Files And Changes]` | Modified/created files from tool calls (capped, paths trimmed to common root) |
+| `[Files And Changes]` | Modified/created/read files from tool calls, annotated with exported symbol names (capped, paths trimmed to common root) |
+| `[Type Catalog]` | Exported signature lines from modified and read files — the public API surface the model needs for continuation |
 | `[Commits]` | Git commits made during the session (last 8, hash + first line) |
-| `[Outstanding Context]` | Unresolved items — errors, pending questions |
+| `[Outstanding Context]` | Unresolved items — error exit codes, test failures, tsc errors, empty search results, pending questions |
 | `[User Preferences]` | Regex-extracted from user messages (`always`, `never`, `prefer`...) |
 | Brief transcript | Chronological conversation flow — rolling window of ~120 recent lines, tool calls collapsed to one-liners with `(#N)` refs |
 
 **Merge policy:**
 - `Session Goal`, `User Preferences`: concise sticky sections
-- `Outstanding Context`: fresh-only (replaced each compaction)
+- `Outstanding Context`, `Type Catalog`: fresh-only (replaced each compaction)
 - `Files And Changes`, `Commits`: unique union across compactions
 - Brief transcript: rolling window, older lines drop off
+
+### Deep error extraction
+
+`[Outstanding Context]` goes beyond keyword matching. It captures:
+
+| Signal | Format | Example |
+|---|---|---|
+| Bash non-zero exit code | `[bash:exit N]` | `[bash:exit 1] npm test → 3 tests failed` |
+| TypeScript compiler error | `[tsc]` | `[tsc] src/auth.ts(12,5): error TS2322: Type 'string' is not...` |
+| Test failure | `[tests]` | `[tests] FAIL auth.test.ts > login should work` |
+| Empty grep/glob | `[no matches]` | `[no matches] Grep "verifyCredentials"` |
+| Tool error result | `[tool]` | `[bash] Command not found` |
+| Blocker text | `[user]` or plain | `[user] The build is still failing with...` |
+
+All items are deduplicated — the same error won't appear twice.
+
+### Symbol-level file annotations
+
+`[Files And Changes]` annotates file paths with exported symbol names extracted from tool call arguments and results:
+
+```
+- Modified: src/auth.ts (login, verifyToken, Session)
+- Read: src/types.ts (User, AuthPayload)
+```
+
+Supported languages: TypeScript/JavaScript (`export function/class/type/interface`), Python (`def`/`class`), Go (`func`, exported only), Rust (`pub fn/struct/enum/trait`).
+
+### Type catalog
+
+`[Type Catalog]` captures the exact exported signature lines from modified and read files. This gives the compacted model the type signatures it needs to continue coding — without re-reading files.
+
+Modified files appear first, read files second. Entries are capped at 8 signatures per file and 12 files total.
 
 ## Recall (Lossless History)
 
@@ -184,9 +238,9 @@ Typical workflow: **search → find relevant entry indices → expand those indi
 
 ## Pipeline
 
-1. **Normalize** — raw Pi messages → uniform blocks (user, assistant, tool_call, tool_result, thinking)
-2. **Filter noise** — strip system messages, empty blocks
-3. **Build sections** — extract goal, file paths, blockers, preferences
+1. **Normalize** — raw Pi messages → uniform blocks (user, assistant, tool_call, tool_result, thinking, bash)
+2. **Filter noise** — strip system messages, empty blocks, noise tools (TodoWrite, etc.)
+3. **Build sections** — extract goal, file paths + symbols, type catalog, blockers (exit codes, tsc, tests, empty grep), preferences
 4. **Brief transcript** — chronological conversation flow, tool calls collapsed to one-liners, text truncated
 5. **Format** — render into bracketed sections + transcript
 6. **Merge** — if previous summary exists: sticky sections merge, volatile sections replace, transcript rolls
