@@ -22,51 +22,42 @@ const formatTokens = (n: number): string => {
   return String(n);
 };
 
-/** Compute global message indices [start, end] for summarized messages. */
+/**
+ * Compute the entry-ID range for summarized messages.
+ *
+ * Uses entry IDs instead of numeric indices so that vcc_recall can correctly
+ * resolve the range against the full session file (not just the active branch,
+ * where numeric indices would be branch-relative and wrong).
+ *
+ * Returns [firstSummarizedEntryId, lastSummarizedEntryId] or undefined.
+ */
 const computeMessageRange = (
   branchEntries: any[],
-  messagesToSummarize: any[],
   firstKeptEntryId: string,
-): [number, number] | undefined => {
-  // Build a map of entry id -> global message index
-  let globalIdx = 0;
-  const idToGlobal = new Map<string, number>();
-  for (const e of branchEntries) {
-    if (e.type === "message" && e.message) {
-      idToGlobal.set(e.id, globalIdx);
-      globalIdx++;
-    }
-  }
-
-  // Find the global index range of summarized messages
-  let startMsgIdx: number | undefined;
-  let endMsgIdx: number | undefined;
-
-  for (const msg of messagesToSummarize) {
-    // Match by content identity — iterate branch entries to find the matching message
-    // We match on role + content hash since we don't have entry ids in messagesToSummarize
-  }
-
-  // Better approach: use messageToEntryId mapping from buildOwnCut
-  // messagesToSummarize were extracted from liveMessages which had entry.id
-  // But buildOwnCut returns only message objects, not entry ids.
-  //
-  // We need to re-derive the range from firstKeptEntryId:
-  // - If firstKeptEntryId is "" (compact-all), range is all messages up to last
-  // - Otherwise, range is from first message up to (firstKeptEntryId - 1)
-
+): [string, string] | undefined => {
   if (!firstKeptEntryId) return undefined;
 
+  // If compact-all sentinel, find the last message entry
   if (firstKeptEntryId === "") {
-    // Compact-all: all messages are summarized
-    const keptGlobalId = idToGlobal.size - 1; // last message
-    return [0, keptGlobalId >= 0 ? keptGlobalId : 0];
+    let lastId: string | undefined;
+    for (const e of branchEntries) {
+      if (e.type === "message" && e.message && e.id) {
+        lastId = e.id;
+      }
+    }
+    return lastId ? [branchEntries.find((e: any) => e.type === "message" && e.message)?.id ?? "", lastId] as [string, string] : undefined;
   }
 
-  const cutGlobalIdx = idToGlobal.get(firstKeptEntryId);
-  if (cutGlobalIdx === undefined || cutGlobalIdx <= 0) return undefined;
+  // Find the first message entry (start of summarized range)
+  const firstMsgId = branchEntries.find(
+    (e: any) => e.type === "message" && e.message && e.id,
+  )?.id;
+  if (!firstMsgId) return undefined;
 
-  return [0, cutGlobalIdx - 1];
+  // If first kept entry IS the first message, nothing was summarized
+  if (firstMsgId === firstKeptEntryId) return undefined;
+
+  return [firstMsgId, firstKeptEntryId];
 };
 
 const dbg = (settings: PiVccSettings, data: Record<string, unknown>) => {
@@ -288,10 +279,9 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
 
     const config = settings;
 
-    // Compute global message range for vcc_recall scope targeting
+    // Compute entry-ID range for compaction-scoped recall
     const messageRange = computeMessageRange(
       branchEntries as any[],
-      agentMessages,
       firstKeptEntryId,
     );
 

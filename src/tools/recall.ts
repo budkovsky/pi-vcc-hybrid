@@ -17,6 +17,11 @@ export const invalidExpandIndices = (requested: number[], available: Set<number>
 /**
  * Read the session file, find compaction entries, and resolve the
  * message range for a given compaction index (0-based).
+ *
+ * The stored messageRange uses entry IDs ([firstId, lastId]).
+ * This function resolves those IDs to global message indices
+ * by scanning the session file.
+ *
  * Returns [startIndex, endIndex] or undefined if not found.
  */
 const resolveCompactionMessageRange = (
@@ -40,7 +45,7 @@ const resolveCompactionMessageRange = (
     }
   }
 
-  // Collect compaction entries in order
+  // Collect pi-vcc compaction entries in order
   const compactions = entries.filter(
     (e: any) => e.type === "compaction" && e.details?.compactor === "pi-vcc",
   );
@@ -51,8 +56,24 @@ const resolveCompactionMessageRange = (
     ? compactions[compactions.length - 1]
     : compactions[targetIndex];
 
-  if (!target?.details?.messageRange) return undefined;
-  return target.details.messageRange as [number, number];
+  const msgRange = target?.details?.messageRange as [string, string] | undefined;
+  if (!msgRange) return undefined;
+
+  // Build entry-id → global-index map from the full session file
+  const idToGlobal = new Map<string, number>();
+  let globalIdx = 0;
+  for (const e of entries) {
+    if (e.type === "message" && e.message) {
+      if (e.id) idToGlobal.set(e.id, globalIdx);
+      globalIdx++;
+    }
+  }
+
+  const firstIdx = idToGlobal.get(msgRange[0]);
+  const lastIdx = idToGlobal.get(msgRange[1]);
+  if (firstIdx === undefined || lastIdx === undefined) return undefined;
+
+  return [firstIdx, lastIdx];
 };
 
 export const registerRecallTool = (pi: ExtensionAPI) => {

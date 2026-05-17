@@ -187,6 +187,10 @@ const formatFileActivity = (blocks: NormalizedBlock[]): string[] => {
   return lines;
 };
 
+// User messages that are purely confirmatory — skip these for "Working on"
+const CONFIRMATORY_USER_RE =
+  /^(ok|okay|yes|yeah|yep|sure|great|thanks|thx|nice|looks? good|works?|perfect|done|thanks!*|got it|i see|lgtm|awesome)\b/i;
+
 /**
  * Extract current working status from the tail of the conversation.
  * Returns up to 3 lines: current focus, last action, next steps.
@@ -195,13 +199,14 @@ const extractCurrentStatus = (blocks: NormalizedBlock[]): string[] => {
   const items: string[] = [];
   const tail = blocks.slice(-20);
 
-  // 1. Current focus: last substantive user message
+  // 1. Current focus: last substantive (non-confirmatory) user message
   for (let i = tail.length - 1; i >= 0; i--) {
     const b = tail[i];
-    if (b.kind === "user" && b.text.trim().length > 10) {
-      items.push(`Working on: ${clip(b.text.trim(), 120)}`);
-      break;
-    }
+    if (b.kind !== "user") continue;
+    const text = b.text.trim();
+    if (text.length < 10 || CONFIRMATORY_USER_RE.test(text)) continue;
+    items.push(`Working on: ${clip(text, 120)}`);
+    break;
   }
 
   // 2. Last action: last tool call that modified/read a file

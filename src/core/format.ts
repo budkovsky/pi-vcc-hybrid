@@ -62,8 +62,8 @@ export interface SummaryMetadata {
   keptCount: number;
   /** Estimated token count of kept tail */
   keptTokensEst: number;
-  /** Global message range summarized [start, end] inclusive */
-  messageRange?: [number, number];
+  /** Entry IDs [firstSummarizedId, lastSummarizedId] for compaction-scoped recall */
+  messageRange?: [string, string];
 }
 
 const formatTokens = (n: number): string => {
@@ -76,13 +76,10 @@ export const formatMetadataFooter = (meta: SummaryMetadata): string => {
   const compression = meta.tokensBefore > 0
     ? ` (${Math.round(meta.tokensBefore / Math.max(1, meta.sourceMessageCount))}x)`
     : "";
-  const range = meta.messageRange
-    ? ` | range: [#${meta.messageRange[0]}, #${meta.messageRange[1]}]`
-    : "";
   return [
     `---`,
     `Compaction at ${meta.timestamp} \u2014 ${meta.sourceMessageCount} msgs \u2192 ${formatTokens(meta.tokensBefore)} tok${compression}` +
-      ` | tail: ${meta.keptCount} msgs ~${formatTokens(meta.keptTokensEst)} tok${range}`,
+      ` | tail: ${meta.keptCount} msgs ~${formatTokens(meta.keptTokensEst)} tok`,
   ].join("\n");
 };
 
