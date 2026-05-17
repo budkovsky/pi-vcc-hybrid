@@ -21,7 +21,7 @@ Inspired by [VCC](https://github.com/lllyasviel/VCC) **(View-oriented Conversati
 | **History after compaction** | Gone — agent only sees summary | Active lineage searchable via `vcc_recall` (`scope:"all"` available) |
 | **Repeated compactions** | Each rewrite risks losing more | Sections merge and accumulate |
 | **Cost** | Burns tokens on summarization call | Zero — no API calls |
-| **Structure** | Free-form prose | Brief transcript + 6 semantic sections |
+| **Structure** | Free-form prose | Brief transcript + 7 semantic sections + priority tags + metadata footer |
 | **Code awareness** | None (summarizes text only) | Symbol-annotated files, type catalog, deep error extraction |
 
 ### Real session metrics
@@ -45,7 +45,10 @@ Measured on real session JSONLs under `~/.pi/agent/sessions` (chars = rendered m
 - **6 semantic sections** — session goal, files & changes, type catalog, commits, outstanding context, user preferences
 - **Bounded merge** — rolling sections re-capped after merge instead of growing unbounded
 - **Lossless recall** — `vcc_recall` reads raw session JSONL, so active-lineage history stays searchable across compactions
-- **Scoped recall** — default search is active lineage; use `scope:"all"` / `scope:all` to intentionally search across all lineages
+- **Scoped recall** — default search is active lineage; use `scope:"all"` for all lineages, or `scope:"compaction:N"` / `scope:"compaction:latest"` to search within a specific compaction segment's original messages
+- **Priority error tags** — outstanding context items tagged `[ERROR]`, `[WARN]`, `[INFO]` for urgency at a glance
+- **Metadata footer** — each compaction summary ends with timestamp, compression ratio, and message range
+- **Cache-friendly ordering** — stable sections (goal, preferences, files, commits) come first; volatile sections (outstanding context, current status) come last, maximizing prompt-cacheable prefix across compactions
 - **Regex search** — `vcc_recall` supports regex patterns (`hook|inject`, `fail.*build`) and OR-ranked multi-word queries
 - **Result ranking** — search results ranked by term relevance, rare terms weighted higher than common ones
 - **`/pi-vcc-recall`** — slash command to search history directly, results shown as collapsible message and auto-fed to agent as context
@@ -111,13 +114,15 @@ Pi splits the conversation at the **last user message**. Everything after — th
 - a1b2c3d: fix(auth): refresh token after password reset
 
 [Outstanding Context]
-- [no matches] grep "verifyCredentials"
-- [bash:exit 1] bun test tests/auth.test.ts → 3 tests failed
-- [tsc] src/session.ts(5,18): error TS2304: Cannot find name 'authenticateUser'
+- [ERROR] [tsc] src/session.ts(5,18): error TS2304: Cannot find name 'authenticateUser'
+- [ERROR] [bash:exit 1] bun test tests/auth.test.ts → 3 tests failed
+- [WARN]  [tests] FAIL auth.test.ts > refresh token should work
+- [INFO]  [no matches] grep "verifyCredentials"
 
-[User Preferences]
-- Prefer Vietnamese responses
-- Always run tests before committing
+[Current Status]
+- Working on: fix the auth bug, users can't log in after password reset
+- Last action: Edit "src/auth/session.ts"
+- Next: need to add the refreshToken function signature
 
 ---
 
@@ -134,6 +139,9 @@ Root cause is a missing token refresh after password reset...
 
 ---
 
+---
+Compaction at 2026-05-18T14:32:00Z — 47 msgs → 23k tok (12x) | tail: 3 msgs ~5.2k tok (range: [#0, #43])
+
 Use `vcc_recall` to search for prior work, decisions, and context from before this summary.
 Do not redo work already completed.
 ```
@@ -148,13 +156,14 @@ Sections appear only when relevant — a session with no git commits won't have 
 | `[Files And Changes]` | Modified/created/read files from tool calls, annotated with exported symbol names (capped, paths trimmed to common root) |
 | `[Type Catalog]` | Exported signature lines from modified and read files — the public API surface the model needs for continuation |
 | `[Commits]` | Git commits made during the session (last 8, hash + first line) |
-| `[Outstanding Context]` | Unresolved items — error exit codes, test failures, tsc errors, empty search results, pending questions |
+| `[Outstanding Context]` | Unresolved items — error exit codes, test failures, tsc errors, empty search results, pending questions — tagged `[ERROR]`/`[WARN]`/`[INFO]` by severity |
+| `[Current Status]` | Current focus, last file-modifying action, and next steps — extracted from the conversation tail |
 | `[User Preferences]` | Regex-extracted from user messages (`always`, `never`, `prefer`...) |
 | Brief transcript | Chronological conversation flow — rolling window of ~120 recent lines, tool calls collapsed to one-liners with `(#N)` refs |
 
 **Merge policy:**
 - `Session Goal`, `User Preferences`: concise sticky sections
-- `Outstanding Context`, `Type Catalog`: fresh-only (replaced each compaction)
+- `Outstanding Context`, `Type Catalog`, `Current Status`: volatile (replaced each compaction)
 - `Files And Changes`, `Commits`: unique union across compactions
 - Brief transcript: rolling window, older lines drop off
 
@@ -201,17 +210,22 @@ Pi's default compaction discards old messages permanently. After compaction, the
 Queries support **regex** and **multi-word OR logic** ranked by relevance:
 
 ```
-vcc_recall({ query: "auth token" })                         // active-lineage OR search, ranked
-vcc_recall({ query: "auth token", page: 2 })                // paginated (5 results/page)
-vcc_recall({ query: "hook|inject" })                         // regex pattern
-vcc_recall({ query: "fail.*build" })                         // regex pattern
-vcc_recall({ query: "auth token", scope: "all" })           // search all lineages
+vcc_recall({ query: "auth token" })                                    // active-lineage OR search, ranked
+vcc_recall({ query: "auth token", page: 2 })                           // paginated (5 results/page)
+vcc_recall({ query: "hook|inject" })                                    // regex pattern
+vcc_recall({ query: "fail.*build" })                                    // regex pattern
+vcc_recall({ query: "auth token", scope: "all" })                      // search all lineages
+vcc_recall({ query: "race condition", scope: "compaction:2" })         // search within compaction #2's segment
+vcc_recall({ query: "design rationale", scope: "compaction:latest" })  // search most recent compaction segment
 ```
+
+Compaction-scoped search targets only the original messages that were summarized by that compaction cycle. This lets you drill into specific conversation segments without sifting through unrelated chat.
 
 Manual slash command:
 
 ```
 /pi-vcc-recall auth token scope:all
+/pi-vcc-recall race condition scope:compaction:latest
 ```
 
 ### Browse
@@ -242,8 +256,9 @@ Typical workflow: **search → find relevant entry indices → expand those indi
 2. **Filter noise** — strip system messages, empty blocks, noise tools (TodoWrite, etc.)
 3. **Build sections** — extract goal, file paths + symbols, type catalog, blockers (exit codes, tsc, tests, empty grep), preferences
 4. **Brief transcript** — chronological conversation flow, tool calls collapsed to one-liners, text truncated
-5. **Format** — render into bracketed sections + transcript
+5. **Format** — render into bracketed sections + transcript, with cache-friendly ordering (stable sections first, volatile last)
 6. **Merge** — if previous summary exists: sticky sections merge, volatile sections replace, transcript rolls
+7. **Footer** — append timestamp, compression ratio, message range, and recall note
 
 ## Config
 
