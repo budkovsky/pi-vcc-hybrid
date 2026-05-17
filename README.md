@@ -47,8 +47,9 @@ Measured on real session JSONLs under `~/.pi/agent/sessions` (chars = rendered m
 - **Priority error tags** — outstanding context items tagged `[ERROR]`, `[WARN]`, `[INFO]` for urgency at a glance
 - **Metadata footer** — each compaction summary ends with timestamp, compression ratio, and message range
 - **Cache-friendly ordering** — stable sections (goal, preferences, files, commits) come first; volatile sections (outstanding context, current status) come last, maximizing prompt-cacheable prefix across compactions
+- **Adaptive recall view** — search results grouped by conversation segments (turns) with match indicators (`>`) and context preservation, so the agent sees the conversational structure around each match
 - **Regex search** — `vcc_recall` supports regex patterns (`hook|inject`, `fail.*build`) and OR-ranked multi-word queries
-- **Result ranking** — search results ranked by term relevance, rare terms weighted higher than common ones
+- **Result ranking** — search results ranked by BM25 term relevance, rare terms weighted higher than common ones
 - **`/pi-vcc-recall`** — slash command to search history directly, results shown as collapsible message and auto-fed to agent as context
 - **Fallback cut** — still works when Pi core returns nothing to summarize
 - **`/pi-vcc`** — manual compaction on demand
@@ -196,6 +197,53 @@ Modified files appear first, read files second. Entries are capped at 8 signatur
 Pi's default compaction discards old messages permanently. After compaction, the agent only sees the summary.
 
 `vcc_recall` bypasses this by reading the raw session JSONL file directly. By default it searches only the active conversation lineage, regardless of how many compactions have happened. Use `scope:"all"` only when you intentionally want to include off-lineage branches.
+
+### Adaptive View (Structure-Preserving Search Results)
+
+Search results are grouped by **conversation segments** (turns) instead of showing flat ranked entries. Each segment starts at a user or bash message and includes all subsequent assistant responses, tool calls, and tool results.
+
+Matched entries are marked with `>`, non-matched entries within the same segment are shown for context:
+
+```
+vcc_recall({ query: "auth bug" })
+```
+
+Returns:
+```
+Found 4 matches for "auth bug" — 2 matches across 1 segment
+
+--- #12-#17 (2/6 entries match) ---
+> #12 [user] I found an auth bug in the login flow
+  #13 [assistant] Let me check the auth module...
+  #14 [tool_call] Read src/auth.ts
+  #15 [tool_result] export function login...
+> #16 [assistant] The bug is in refreshToken
+  #17 [tool_result] Edit src/auth.ts (success)
+```
+
+When matches span multiple segments, adjacent non-matching turns are shown with a `(context)` tag:
+
+```
+Found 3 matches for "cache" — 2 matches across 2 segments
+
+--- #5-#8 (1/4 entries match) ---
+  #5 [user] add caching to the API layer
+  #6 [assistant] I'll set up Redis...
+  #7 [tool_call] Edit src/cache.ts
+> #8 [tool_result] Redis connected successfully
+
+--- #20-#23 (1/4 entries match) ---
+> #20 [user] the cache eviction policy is wrong
+  #21 [assistant] Let me check the TTL config...
+  #22 [tool_call] Read src/cache.ts
+  #23 [tool_result] export const TTL = 3600
+
+--- #9-#19 (context) ---
+  #9 [user] also fix the error handling
+  #10 [assistant] Added try/catch around cache calls
+```
+
+This format preserves the conversational structure around matches, so the agent can understand *where* in the conversation flow each match occurred and what context surrounds it.
 
 ### Search
 
