@@ -36,6 +36,148 @@ Measured on real session JSONLs under `~/.pi/agent/sessions` (chars = rendered m
 | Session F | 46 | 5,234 | 3,364 | 35.7% | 5ms |
 | Session G | 27 | 8,595 | 2,489 | 71.0% | 2ms |
 
+## Compaction Deep Dive
+
+pi-vcc is one of four compaction approaches in the AI coding-agent ecosystem. Here is how they compare.
+
+### Pi Default Harness
+
+*Based in `@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js`*
+
+**Architecture**: LLM-based structured summarization via a summarization model.
+
+**Flow**:
+1. `shouldCompact()` — checks if `contextTokens > contextWindow - reserveTokens (16k)`
+2. `prepareCompaction()` — walks branch entries, finds previous compaction boundary, calculates cut point by walking newest→oldest accumulating estimated message sizes until hitting `keepRecentTokens` (20k default)
+3. `compact()` → `generateSummary()` — serializes conversation to plain text (not LLM messages, to prevent the model from continuing it), calls LLM with structured summarization prompt
+4. Two prompt variants: initial `SUMMARIZATION_PROMPT` (first time) or `UPDATE_SUMMARIZATION_PROMPT` (merges into existing summary)
+5. Output format: `## Goal / ## Constraints & Preferences / ## Progress / ## Key Decisions / ## Next Steps / ## Critical Context`
+6. Detects mid-turn splits — when the cut falls mid-turn, generates a separate turn prefix summary in parallel and merges both
+7. Tracks file operations (read/write/edit from tool calls) and appends `<read-files>` / `<modified-files>` XML tags to each summary
+
+**Key characteristics**:
+- Pure LLM — every compaction costs a model call
+- Token-budget backwalk keeps a configurable tail (20k recent tokens)
+- Turn-aware: `isSplitTurn` preserves incomplete assistant turns
+- Previous-summary merging via update prompt (incremental)
+- Non-deterministic — different runs produce different summaries
+
+---
+
+### Claude Code
+
+*Based in `claude-code/src/services/compact/`*
+
+**Architecture**: Three-tier compaction — proactive/manual (LLM), session memory (LLM-free), and micro-compaction (cache-editing).
+
+**Flow (Main Compaction — `compactConversation()`)** :
+1. `shouldAutoCompact()` → `getAutoCompactThreshold()` = context window minus reserved output minus buffer (13k)
+2. PreCompact hooks execute (SDK extensions can inject custom instructions)
+3. `getCompactPrompt()` builds a prompt with a `NO_TOOLS_PREAMBLE`, a detailed 9-section template, and a trailer rejecting tool calls
+4. `streamCompactSummary()` first tries a **cache-sharing fork path** (piggybacks on the main thread's prompt-cache prefix with a forked agent), then falls back to a direct streaming path with only `FileReadTool` + `ToolSearchTool`
+5. Strips images/documents from messages before sending to the compact API (replaces with `[image]` / `[document]` markers)
+6. PTL (Prompt Too Long) retry: `truncateHeadForPTLRetry()` drops oldest API-round groups and retries (up to 3)
+7. After summary generation: creates post-compact file attachments (re-reads recently accessed files), plan attachments, skill attachments, delta tool announcements
+8. Executes SessionStart hooks and PostCompact hooks
+9. Returns `CompactionResult { boundaryMarker, summaryMessages, attachments, hookResults, messagesToKeep }`
+
+**Flow (Session Memory Compact — `trySessionMemoryCompaction()`)** :
+1. Feature-gated: `tengu_session_memory` + `tengu_sm_compact` flags
+2. Waits for in-progress session memory extraction to finish
+3. `calculateMessagesToKeepIndex()` starts from `lastSummarizedMessageId`, expands backwards to meet `minTokens` (10k) and `minTextBlockMessages` (5), capped at `maxTokens` (40k)
+4. `adjustIndexToPreserveAPIInvariants()` ensures tool_use/tool_result pairs are not split (handles streaming message fragmentation)
+5. No LLM call — uses already-extracted session memory content as the summary
+6. Truncates oversized sections via `truncateSessionMemoryForCompact()`
+7. Falls back to legacy compact if session memory is empty or boundary can't be found
+
+**Flow (Micro Compact — `microcompactMessages()`)** :
+1. **Time-based trigger**: if the gap since the last main-loop assistant message exceeds the threshold (cold server cache), content-clear old tool results to shrink what gets rewritten
+2. **Cached microcompact** (experimental, `CACHED_MICROCOMPACT` feature): tracks tool results per message, queues `cache_edits` blocks for the API layer — removes tool results from the server-side cached prompt without mutating local messages and without invalidating the cached prefix
+3. Legacy microcompact (content-clear) fully replaced by the cache-editing approach
+
+**Key characteristics**:
+- Three compaction tiers: full LLM / session memory (LLM-free) / micro (cache-edit only)
+- Cache-aware: cache-sharing fork path, cache-editing microcompact, PTL retry
+- Heavy hook system: 3 hook sets (PreCompact → SessionStart → PostCompact)
+- File restoration: re-attaches recently read files post-compact
+- Circuit breaker: 3 consecutive failures stops retrying
+- Partial compact: supports `up_to` (summarize before, keep prefix) / `from` (summarize after, keep suffix) directions
+- Analytics: `tengu_compact` events with full token breakdowns, `analyzeContext()` walks every content block
+
+---
+
+### Codex (OpenAI)
+
+*Based in `codex/codex-rs/core/src/compact.rs`, `compact_remote.rs`, `compact_remote_v2.rs`*
+
+**Architecture**: Rust-based, three concurrent compaction paths — inline (local LLM), remote (server-side), and remote v2 (streaming).
+
+**Flow**:
+1. Decision: `should_use_remote_compact_task()` checks whether the provider supports remote compaction
+2. Three parallel implementations:
+
+**Inline (local) Path** (`compact.rs`):
+1. Pre-hooks → LLM call with a compact prompt → Post-hooks
+2. Uses `ContextCompactionItem` — a first-class protocol item embedded in conversation history (not a hack)
+3. `COMPACT_USER_MESSAGE_MAX_TOKENS` = 20k token cap
+4. `InitialContextInjection` controls when system context is re-injected:
+   - `DoNotInject` — for pre-turn/manual compaction (next regular turn handles reinjection)
+   - `BeforeLastUserMessage` — for mid-turn compaction (injects above the last real user message)
+5. Summarization prompt (from `templates/compact/prompt.md`):
+   - "Context checkpoint compaction" handoff summary
+   - Key sections: progress, decisions, constraints, remaining work
+6. Summary prefix (`templates/compact/summary_prefix.md`): `"Another language model started to solve this problem..."`
+7. `trim_function_call_history_to_fit_context_window()` — truncates oversized call histories before compact
+8. Event-driven: emits TurnStarted, stream events, TurnCompleted
+9. Backoff retry via `codex_util::backoff`
+
+**Remote Path** (`compact_remote.rs`):
+1. Delegates compaction to the codex-backend server via the Responses API Compact endpoint
+2. Server-side compaction uses OpenAI's own compact infrastructure
+3. Client sends history, server returns a `CompactedItem`
+4. `process_compacted_history()` replaces conversation items with the compacted version
+5. Same hook system (PreCompact → PostCompact) and analytics tracking
+6. Logs request/response data via `build_compact_request_log_data()`
+
+**Remote v2 Path** (`compact_remote_v2.rs`):
+1. Uses Responses API streaming compact — same endpoint as v1 but leverages the existing `ModelClientSession` for streaming
+2. Feature-gated: `Feature::RemoteCompactionV2` (under development, disabled by default)
+3. Reuses `process_compacted_history()` and `trim_function_call_history_to_fit_context_window()`
+4. Rollout-trace aware: `CompactionCheckpointTracePayload` for end-to-end observability
+
+**Key characteristics**:
+- Three parallel compaction implementations: inline / remote / remote-v2
+- Server-side compaction can delegate to OpenAI's backend (token savings on the client)
+- Rust async with cancellation tokens throughout
+- `ContextCompactionItem` is a first-class protocol type, not a synthetic message
+- Fine-grained `InitialContextInjection` control over system context reinjection
+- Event-driven architecture: full turn lifecycle for compaction (start → stream → complete → error)
+- `CompactionAnalyticsAttempt` tracks every phase, status, and implementation
+
+---
+
+### Comparison Summary
+
+| Aspect | Pi Default | pi-vcc | Claude Code | Codex |
+|--------|-----------|--------|-------------|-------|
+| **Language** | TypeScript (compiled) | TypeScript (extension) | TypeScript (source) | Rust |
+| **LLM dependency** | Always required | None | Optional (session memory bypass) | Always (inline) / server-offloaded |
+| **Cut strategy** | Token-budget backwalk (20k recent) | Keep last user message | Min tokens (10k) + min text messages (5) | Context window trim |
+| **Summary format** | Markdown structured sections `## Goal` etc. | Bracket-tagged sections `[Session Goal]` | `<analysis>` scratchpad + 9-section `<summary>` | Markdown handoff |
+| **Merge with prev** | Update prompt (LLM merges) | Header-by-header deterministic dedup | Via session memory (LLM-free) or prompt | Replaces (no merge) |
+| **File tracking** | `<read-files>` / `<modified-files>` XML tags | `[Files And Changes]` with symbol annotations | Post-compact file re-attachment (re-reads recent files) | Via server (server-managed) |
+| **Turn splitting** | Yes (`isSplitTurn` with parallel prefix summary) | No (cuts at last user message) | Via `preservedSegment` metadata | Via `InitialContextInjection` |
+| **Cache awareness** | None | Section ordering (stable first for prompt cache) | Cache-sharing fork path, cache-editing microcompact, PTL retry | Server-side cache (remote path) |
+| **Hook system** | 2 hooks (`session_before_compact`, `session_compact`) | 2 hooks (before_compact, session_compact) | 3 hooks (PreCompact, SessionStart, PostCompact) | 2 hooks (PreCompact, PostCompact) |
+| **Micro compaction** | None | None | Yes (cache-editing + time-based content clear) | None |
+| **Partial compact** | None | None | Yes (`up_to` / `from` directions) | None |
+| **Error handling** | Basic | Orphan recovery (auto-fixes broken kept-entry IDs) | PTL retry (3x), circuit breaker (3 failures) | Backoff retry |
+| **Token estimation** | chars/4 heuristic | chars/4 heuristic | `roughTokenCountEstimation` + 4/3 padding | `approx_token_count` |
+| **Determinism** | Non-deterministic (LLM) | Deterministic (no LLM) | Non-deterministic (LLM) / deterministic (SM) | Non-deterministic (LLM) / deterministic (server) |
+| **Latency** | LLM call time | 2–64ms | LLM call time (or instant with SM/micro) | LLM call time (or server-offloaded) |
+| **Cost** | Per-compact LLM tokens | Zero | Per-compact LLM tokens or zero (SM/micro) | Per-compact LLM tokens or server-side |
+| **Debugging** | Basic | `/tmp/pi-vcc-debug.json` snapshots | `logForDebugging`, analytics events | Rollout trace, compaction analytics |
+
 ## Features
 
 - **No LLM** — purely algorithmic, zero extra API cost
