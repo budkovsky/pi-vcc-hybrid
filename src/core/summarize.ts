@@ -26,6 +26,13 @@ const HEADER_NAMES = [
 
 const SEPARATOR = "\n\n---\n\n";
 
+/** Preamble prepended to every compaction summary. */
+const HANDFOFF_PREAMBLE =
+  "This summary captures work done before the most recent messages in this session. " +
+  "Read it to pick up context — this is work already in progress. " +
+  "Do not recap what was done, do not ask what to do next. " +
+  "Continue directly where you left off.";
+
 /** Extract a named section from summary text */
 const sectionOf = (text: string, header: string): string => {
   const tag = `[${header}]`;
@@ -159,7 +166,8 @@ export const compile = (input: CompileInput): string => {
     : undefined;
   const merged = prev ? mergePrevious(prev, fresh) : fresh;
   if (!merged) return "";
-  return wrapLongLines(merged + SEPARATOR + RECALL_NOTE);
+  const body = merged + SEPARATOR + RECALL_NOTE;
+  return wrapLongLines(HANDFOFF_PREAMBLE + "\n\n" + body);
 };
 
 const stripRecallNote = (text: string): string => {
