@@ -1,8 +1,8 @@
-export interface LineageEntryLike {
+interface LineageEntryLike {
   id?: string;
 }
 
-export interface LineageSessionManagerLike {
+interface LineageSessionManagerLike {
   getBranch: () => LineageEntryLike[];
   getEntries?: () => LineageEntryLike[];
 }

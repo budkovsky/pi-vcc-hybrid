@@ -10,7 +10,7 @@ import { extractSymbolChanges } from "../extract/symbol-changes";
 import { extractTypeCatalog, formatTypeCatalog } from "../extract/type-catalog";
 import { buildBriefSections, sectionsToTranscript, stringifyBrief } from "./brief";
 
-export interface BuildSectionsInput {
+interface BuildSectionsInput {
   blocks: NormalizedBlock[];
 }
 

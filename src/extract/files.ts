@@ -1,4 +1,4 @@
-import type { NormalizedBlock } from "../types";
+import type { FileOps, NormalizedBlock } from "../types";
 import { extractPath } from "../core/tool-args";
 import { clip } from "../core/content";
 
@@ -35,6 +35,18 @@ const RUST_DECL_RE =
 const RUST_IMPL_RE =
   /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?impl\s+(?:<[^>]+>\s+)?(\w+)(?:\s+for\s+(\w+))?/;
 
+// Elixir — def, defp, defmacro, defmacrop, defguard, defguardp
+const ELIXIR_DEF_RE =
+  /^\s*def(?:p|macro|macrop|guard|guardp)?\s+(\w+)/;
+
+// Elixir — defmodule ModuleName
+const ELIXIR_MODULE_RE =
+  /^\s*defmodule\s+(\w+)/;
+
+// Elixir — defstruct, defprotocol, defimpl
+const ELIXIR_SPECIAL_RE =
+  /^\s*def(?:struct|protocol|impl)\s+(\w+)/;
+
 // Java / Kotlin / C# — class, interface, enum, record
 const JAVA_TYPE_RE =
   /^\s*(?:(?:public|private|protected)\s+)?(?:abstract\s+|static\s+|final\s+|sealed\s+)?(?:class|interface|enum|@interface|record)\s+(\w+)/;
@@ -50,6 +62,13 @@ const C_TYPE_RE =
 // C / C++ — function (returnType name() at line start)
 const C_FUNC_RE =
   /^\s*(?:(?:static|extern|inline|virtual)\s+)?(?:\w+(?:\s*[*&]+\s*)?)+(\w+)\s*\(/;
+
+// Ruby — def, def self.method_name, class, module
+const RUBY_DEF_RE =
+  /^\s*def\s+(?:self\.)?(\w+)/;
+
+const RUBY_TYPE_RE =
+  /^\s*(?:class|module)\s+(\w+)/;
 
 // Python
 const PY_DECL_RE =
@@ -76,6 +95,14 @@ const parseDeclName = (line: string): string | null => {
   m = line.match(RUST_IMPL_RE);
   if (m) return m[1];
 
+  // Elixir
+  m = line.match(ELIXIR_MODULE_RE);
+  if (m) return m[1];
+  m = line.match(ELIXIR_SPECIAL_RE);
+  if (m) return m[1];
+  m = line.match(ELIXIR_DEF_RE);
+  if (m) return m[1];
+
   // Java / Kotlin / C# (types before methods to avoid 'class' being caught as a method)
   m = line.match(JAVA_TYPE_RE);
   if (m) return m[1];
@@ -86,6 +113,12 @@ const parseDeclName = (line: string): string | null => {
   m = line.match(C_TYPE_RE);
   if (m) return m[1];
   m = line.match(C_FUNC_RE);
+  if (m) return m[1];
+
+  // Ruby
+  m = line.match(RUBY_TYPE_RE);
+  if (m) return m[1];
+  m = line.match(RUBY_DEF_RE);
   if (m) return m[1];
 
   // Python

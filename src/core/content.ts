@@ -37,7 +37,7 @@ export const nonEmptyLines = (text: string): string[] =>
 export const firstLine = (text: string, max = 200): string =>
   clip(text.split("\n")[0] ?? "", max);
 
-export const textParts = (content: Message["content"]): string[] => {
+const textParts = (content: Message["content"]): string[] => {
   if (!content) return [];
   if (typeof content === "string") return [content];
   return content
@@ -49,7 +49,7 @@ export const textOf = (content: Message["content"]): string =>
   textParts(content).join("\n");
 
 /** Extract a snippet of ~`radius` chars around the first match of `term` in `text`. */
-export const snippet = (text: string, term: string, radius = 60): string | null => {
+const snippet = (text: string, term: string, radius = 60): string | null => {
   const idx = text.toLowerCase().indexOf(term.toLowerCase());
   if (idx === -1) return null;
   const start = Math.max(0, idx - radius);

@@ -72,7 +72,7 @@ const formatTokens = (n: number): string => {
 };
 
 /** Build the metadata footer line. */
-export const formatMetadataFooter = (meta: SummaryMetadata): string => {
+const formatMetadataFooter = (meta: SummaryMetadata): string => {
   const compression = meta.tokensBefore > 0
     ? ` (${Math.round(meta.tokensBefore / Math.max(1, meta.sourceMessageCount))}x)`
     : "";

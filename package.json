@@ -18,6 +18,14 @@
     "@earendil-works/pi-coding-agent": ">=0.74.0 <1.0.0",
     "typebox": ">=1.1.24 <2.0.0"
   },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "knip": "^5.55.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint:dead": "knip"
+  },
   "pi": {
     "extensions": [
       "./index.ts"

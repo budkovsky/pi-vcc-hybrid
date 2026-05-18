@@ -33,7 +33,7 @@ const MAX_SCAN_LINES = 150;
 // Max total signature length
 const MAX_SIG_LEN = 120;
 
-export interface ExportSig {
+interface ExportSig {
   file: string;
   signatures: string[];
   modified: boolean;
@@ -62,10 +62,10 @@ const extractSigsFromText = (content: string): string[] => {
   return sigs;
 };
 
-const findToolResult = (blocks: NormalizedBlock[], callIndex: number): NormalizedBlock | null => {
+const findToolResult = (blocks: NormalizedBlock[], callIndex: number): Extract<NormalizedBlock, { kind: "tool_result" }> | null => {
   for (let i = callIndex + 1; i < Math.min(blocks.length, callIndex + 3); i++) {
     const b = blocks[i];
-    if (b.kind === "tool_result" || b.kind === "bash") return b;
+    if (b.kind === "tool_result") return b as Extract<NormalizedBlock, { kind: "tool_result" }>;
   }
   return null;
 };

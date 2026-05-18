@@ -23,8 +23,8 @@ const isNoiseUser = (text: string): boolean => {
 const segmenter = new Intl.Segmenter(undefined, { granularity: "word" });
 
 /** Check if segment is a word (Bun's isWordLike is unreliable for alphanumeric tokens) */
-const isWord = (seg: { segment: string; isWordLike: boolean }): boolean =>
-  seg.isWordLike || /[\p{L}\p{N}]/u.test(seg.segment);
+const isWord = (seg: { segment: string; isWordLike?: boolean }): boolean =>
+  seg.isWordLike === true || /[\p{L}\p{N}]/u.test(seg.segment);
 
 // Common stop words — don't count toward budget
 const STOP_WORDS = new Set([
@@ -110,7 +110,7 @@ const toolOneLiner = (name: string, args: Record<string, unknown>): string => {
   return `* ${name}`;
 };
 
-export interface BriefLine {
+interface BriefLine {
   /** Section header like "[user]", "[assistant]", "[tool_error] bash" */
   header: string;
   /** Content lines for this section */
@@ -386,5 +386,5 @@ export const sectionsToTranscript = (sections: BriefLine[]): TranscriptEntry[] =
 };
 
 /** Convenience: build sections from blocks and stringify to text */
-export const compileBrief = (blocks: NormalizedBlock[]): string =>
+const compileBrief = (blocks: NormalizedBlock[]): string =>
   stringifyBrief(buildBriefSections(blocks));

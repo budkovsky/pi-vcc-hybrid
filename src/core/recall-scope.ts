@@ -1,6 +1,6 @@
-export type RecallScope = "lineage" | "all" | `compaction:${string}`;
+type RecallScope = "lineage" | "all" | `compaction:${string}`;
 
-export interface ParsedRecallScope {
+interface ParsedRecallScope {
   scope: RecallScope;
   compactionIndex?: number; // 0-based compaction number to scope to
   text: string;

@@ -83,10 +83,10 @@ const extractSymbolsFromContent = (content: string, filePath: string, access: "m
 
 // Try to get file content from tool_result blocks that follow a Read/Edit/Write call.
 // Returns the text content if available.
-const findToolResult = (blocks: NormalizedBlock[], callIndex: number): NormalizedBlock | null => {
+const findToolResult = (blocks: NormalizedBlock[], callIndex: number): Extract<NormalizedBlock, { kind: "tool_result" }> | null => {
   for (let i = callIndex + 1; i < Math.min(blocks.length, callIndex + 3); i++) {
     const b = blocks[i];
-    if (b.kind === "tool_result" || b.kind === "bash") return b;
+    if (b.kind === "tool_result") return b as Extract<NormalizedBlock, { kind: "tool_result" }>;
   }
   return null;
 };
@@ -144,7 +144,7 @@ export const extractSymbolChanges = (blocks: NormalizedBlock[]): SymbolRef[] => 
 };
 
 /** Format symbol changes for display, grouped by file */
-export const formatSymbolChanges = (symbols: SymbolRef[], limit = 15): string[] => {
+const formatSymbolChanges = (symbols: SymbolRef[], limit = 15): string[] => {
   if (symbols.length === 0) return [];
 
   const byFile = new Map<string, SymbolRef[]>();

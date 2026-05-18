@@ -18,7 +18,7 @@ const normalizeOne = (msg: Message, msgIndex: number): NormalizedBlock[] => {
     return blocks.length > 0 ? blocks : [{ kind: "user", text: "", sourceIndex: msgIndex }];
   }
 
-  if (msg.role === "bashExecution") {
+  if ((msg as any).role === "bashExecution") {
     const cmd = (msg as any).command ?? "";
     const out = (msg as any).output ?? "";
     const exit = (msg as any).exitCode;

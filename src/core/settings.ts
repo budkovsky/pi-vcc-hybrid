@@ -2,10 +2,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join } from "path";
 
-export const SETTINGS_PATH_DEFAULT = join(homedir(), ".pi", "agent", "pi-vcc-config.json");
+const SETTINGS_PATH_DEFAULT = join(homedir(), ".pi", "agent", "pi-vcc-config.json");
 const settingsPath = (): string => process.env.PI_VCC_CONFIG_PATH ?? SETTINGS_PATH_DEFAULT;
 /** Backwards-compat export. Resolves at access time, not import time. */
-export const SETTINGS_PATH = settingsPath();
+const SETTINGS_PATH = settingsPath();
 
 export interface PiVccSettings {
   /**
@@ -23,7 +23,7 @@ export interface PiVccSettings {
   debug: boolean;
 }
 
-export const DEFAULT_SETTINGS: PiVccSettings = {
+const DEFAULT_SETTINGS: PiVccSettings = {
   overrideDefaultCompaction: false,
   debug: false,
 };

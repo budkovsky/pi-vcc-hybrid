@@ -7,7 +7,7 @@ import type { PiVccCompactionDetails } from "../details";
 
 export const PI_VCC_COMPACT_INSTRUCTION = "__pi_vcc__";
 
-export interface CompactionStats {
+interface CompactionStats {
   summarized: number;
   kept: number;
   keptTokensEst: number;
@@ -87,15 +87,15 @@ interface EntryWithMessage {
   message: { role: string; content: unknown };
 }
 
-export type OwnCutCancelReason =
+type OwnCutCancelReason =
   | "no_live_messages"
   | "too_few_live_messages";
 
-export type OwnCutResult =
+type OwnCutResult =
   | { ok: true; messages: any[]; firstKeptEntryId: string; compactAll: boolean }
   | { ok: false; reason: OwnCutCancelReason };
 
-export function buildOwnCut(branchEntries: any[]): OwnCutResult {
+function buildOwnCut(branchEntries: any[]): OwnCutResult {
   // Find the last compaction entry and its firstKeptEntryId
   let lastCompactionIdx = -1;
   let lastKeptId: string | undefined;
@@ -191,7 +191,7 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
       const lastCompIdx = lastComp ? (branchEntries as any[]).indexOf(lastComp) : -1;
 
       // Recompute liveMessages view (same logic as buildOwnCut) for diagnostic
-      const lastKeptId: string | undefined = lastComp?.firstKeptEntryId;
+      const lastKeptId: string | undefined = (lastComp as any)?.firstKeptEntryId;
       const hasPriorCompaction = lastCompIdx >= 0;
       const hasValidKeptId = !!lastKeptId && (branchEntries as any[]).some((e: any) => e.id === lastKeptId);
       const diagOrphan = hasPriorCompaction && !hasValidKeptId;
@@ -233,9 +233,9 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
             : [...liveRoles.slice(0, 10), "...", ...liveRoles.slice(-10)],
         },
         lastCompaction: lastComp ? {
-          hasFirstKeptEntryId: !!lastComp.firstKeptEntryId,
-          foundInBranch: lastComp.firstKeptEntryId
-            ? (branchEntries as any[]).some((e: any) => e.id === lastComp.firstKeptEntryId)
+          hasFirstKeptEntryId: !!(lastComp as any).firstKeptEntryId,
+          foundInBranch: (lastComp as any).firstKeptEntryId
+            ? (branchEntries as any[]).some((e: any) => e.id === (lastComp as any).firstKeptEntryId)
             : null,
         } : null,
         tail: (branchEntries as any[]).slice(-5).map((e: any) => ({
