@@ -1,5 +1,5 @@
 import type { TranscriptEntry } from "./core/brief";
-import type { SymbolRef } from "./extract/symbol-changes";
+import type { SymbolRef } from "./extract/shared-symbols";
 
 export interface SectionData {
   sessionGoal: string[];

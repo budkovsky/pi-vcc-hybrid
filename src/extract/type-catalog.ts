@@ -1,4 +1,4 @@
-import type { NormalizedBlock } from "../types";
+import type { NormalizedBlock, ToolResultIndex } from "../types";
 import { extractPath } from "../core/tool-args";
 import { clip } from "../core/content";
 
@@ -62,7 +62,8 @@ const extractSigsFromText = (content: string): string[] => {
   return sigs;
 };
 
-const findToolResult = (blocks: NormalizedBlock[], callIndex: number): Extract<NormalizedBlock, { kind: "tool_result" }> | null => {
+const findToolResult = (blocks: NormalizedBlock[], callIndex: number, tri?: ToolResultIndex): Extract<NormalizedBlock, { kind: "tool_result" }> | null => {
+  if (tri) return tri.get(callIndex);
   for (let i = callIndex + 1; i < Math.min(blocks.length, callIndex + 3); i++) {
     const b = blocks[i];
     if (b.kind === "tool_result") return b as Extract<NormalizedBlock, { kind: "tool_result" }>;
@@ -70,7 +71,7 @@ const findToolResult = (blocks: NormalizedBlock[], callIndex: number): Extract<N
   return null;
 };
 
-export const extractTypeCatalog = (blocks: NormalizedBlock[]): ExportSig[] => {
+export const extractTypeCatalog = (blocks: NormalizedBlock[], tri?: ToolResultIndex): ExportSig[] => {
   const fileSigs = new Map<string, { sigs: string[]; modified: boolean }>();
   const fileOrder: string[] = [];
 
@@ -106,7 +107,7 @@ export const extractTypeCatalog = (blocks: NormalizedBlock[]): ExportSig[] => {
 
     // For Read: extract from tool result (the full file content)
     if (isRead) {
-      const result = findToolResult(blocks, i);
+      const result = findToolResult(blocks, i, tri);
       if (result && result.text && !result.isError) {
         if (!fileSigs.has(filePath)) {
           fileSigs.set(filePath, { sigs: [], modified: false });

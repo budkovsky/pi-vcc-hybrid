@@ -1,4 +1,4 @@
-import type { FileOps, NormalizedBlock } from "../types";
+import type { FileOps, NormalizedBlock, ToolResultIndex } from "../types";
 import { extractPath } from "../core/tool-args";
 import { clip } from "../core/content";
 
@@ -177,15 +177,15 @@ const trimMapKeys = (map: Map<string, string[]>, prefix: string): Map<string, st
 };
 
 // Extract exported symbol names from tool results that follow a Read/Edit/Write call
-const extractSymbolsFromResult = (blocks: NormalizedBlock[], callIndex: number): string[] => {
-  let resultText: string | null = null;
-  for (let j = callIndex + 1; j < Math.min(blocks.length, callIndex + 3); j++) {
-    const r = blocks[j];
-    if (r.kind === "tool_result") {
-      if (r.text && !r.isError) resultText = r.text;
-      break;
+const extractSymbolsFromResult = (blocks: NormalizedBlock[], callIndex: number, tri?: ToolResultIndex): string[] => {
+  const r = tri ? tri.get(callIndex) : (() => {
+    for (let j = callIndex + 1; j < Math.min(blocks.length, callIndex + 3); j++) {
+      const b = blocks[j];
+      if (b.kind === "tool_result") return b as Extract<NormalizedBlock, { kind: "tool_result" }>;
     }
-  }
+    return null;
+  })();
+  const resultText = r && r.text && !r.isError ? r.text : null;
   if (!resultText) return [];
 
   const names: string[] = [];
@@ -222,6 +222,7 @@ const extractSymbolsFromArgs = (args: Record<string, unknown>): string[] => {
 export const extractFiles = (
   blocks: NormalizedBlock[],
   fileOps?: FileOps,
+  tri?: ToolResultIndex,
 ): FileActivity => {
   const act: FileActivity = {
     read: new Set(fileOps?.readFiles ?? []),
@@ -258,7 +259,7 @@ export const extractFiles = (
       }
 
       // From Read/Edit tool results
-      const fromResult = extractSymbolsFromResult(blocks, i);
+      const fromResult = extractSymbolsFromResult(blocks, i, tri);
       const existing = act.symbols.get(p)!;
       for (const name of fromResult) {
         if (!existing.includes(name)) existing.push(name);

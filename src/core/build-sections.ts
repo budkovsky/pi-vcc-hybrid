@@ -1,17 +1,41 @@
-import type { NormalizedBlock } from "../types";
+import type { NormalizedBlock, ToolResultIndex } from "../types";
 import { clip, clipSentence, firstLine, nonEmptyLines } from "./content";
 import type { SectionData } from "../sections";
 import { extractGoals } from "../extract/goals";
 import { extractPath } from "./tool-args";
-import { extractFiles } from "../extract/files";
+import { extractFileAndSymbolData } from "../extract/shared-symbols";
 import { extractPreferences, dedupPreferencesAgainstGoals } from "../extract/preferences";
 import { extractCommits, formatCommits } from "../extract/commits";
-import { extractSymbolChanges } from "../extract/symbol-changes";
-import { extractTypeCatalog, formatTypeCatalog } from "../extract/type-catalog";
 import { buildBriefSections, sectionsToTranscript, stringifyBrief } from "./brief";
+
+/**
+ * Build a one-time look-ahead index: for each tool_call block, find the
+ * nearest tool_result block that follows it (within +3 positions).
+ *
+ * Without this, files.ts / symbol-changes.ts / type-catalog.ts each scan
+ * forward independently — tripling the look-ahead cost and the regex parsing
+ * of tool results. The index collapses that to a single O(n) pre-scan.
+ */
+export const buildToolResultIndex = (blocks: NormalizedBlock[]): ToolResultIndex => {
+  const map = new Map<number, Extract<NormalizedBlock, { kind: "tool_result" }>>();
+  for (let i = 0; i < blocks.length; i++) {
+    if (blocks[i].kind !== "tool_call") continue;
+    for (let j = i + 1; j < Math.min(blocks.length, i + 4); j++) {
+      if (blocks[j].kind === "tool_result") {
+        map.set(i, blocks[j] as Extract<NormalizedBlock, { kind: "tool_result" }>);
+        break;
+      }
+    }
+  }
+  return {
+    get: (callIndex: number) => map.get(callIndex) ?? null,
+  };
+};
 
 interface BuildSectionsInput {
   blocks: NormalizedBlock[];
+  /** Pre-built tool-call → tool-result look-ahead index. Built once, shared across extractors. */
+  toolResultIndex?: ToolResultIndex;
 }
 
 const BLOCKER_RE =
@@ -150,11 +174,8 @@ const extractOutstandingContext = (blocks: NormalizedBlock[]): string[] => {
   return items.slice(0, 8).map(priorityTag);
 };
 
-const formatFileActivity = (blocks: NormalizedBlock[]): string[] => {
-  const act = extractFiles(blocks);
-  // Dedup: if already Modified, drop from Created (file existed before)
-  for (const p of act.modified) act.created.delete(p);
-
+const formatFileActivityFromUnified = (data: import("../extract/shared-symbols").UnifiedExtractResult): string[] => {
+  const act = data.fileActivity;
   const maxSymbolsPerFile = 4;
 
   const cap = (set: Set<string>, limit: number) => {
@@ -163,7 +184,6 @@ const formatFileActivity = (blocks: NormalizedBlock[]): string[] => {
     return arr.slice(0, limit).join(", ") + ` (+${arr.length - limit} more)`;
   };
 
-  // Format with symbol annotations where available
   const formatCategory = (label: string, set: Set<string>): string | null => {
     if (set.size === 0) return null;
     const arr = [...set];
@@ -193,6 +213,30 @@ const formatFileActivity = (blocks: NormalizedBlock[]): string[] => {
   if (createLine) lines.push(createLine);
   const readLine = formatCategory("Read", act.read);
   if (readLine) lines.push(readLine);
+  return lines;
+};
+
+const formatTypeCatalogFromUnified = (data: import("../extract/shared-symbols").UnifiedExtractResult): string[] => {
+  const catalog = data.typeCatalog;
+  if (catalog.length === 0) return [];
+  const lines: string[] = [];
+  let totalSigs = 0;
+  const MAX_TOTAL_SIGS = 30;
+
+  for (const entry of catalog) {
+    if (totalSigs >= MAX_TOTAL_SIGS) {
+      lines.push("(more signatures omitted)");
+      break;
+    }
+    const tag = entry.modified ? "[modified]" : "[read]";
+    lines.push(`${entry.file} ${tag}:`);
+    for (const sig of entry.signatures) {
+      if (totalSigs >= MAX_TOTAL_SIGS) break;
+      lines.push(`  ${sig}`);
+      totalSigs++;
+    }
+  }
+
   return lines;
 };
 
@@ -248,23 +292,30 @@ const extractCurrentStatus = (blocks: NormalizedBlock[]): string[] => {
 
 export const buildSections = (input: BuildSectionsInput): SectionData => {
   const { blocks } = input;
+  // Build tool-call → tool-result look-ahead index once, share across extractors.
+  const tri = input.toolResultIndex ?? buildToolResultIndex(blocks);
+
+  // Single-pass file and symbol extraction — replaces the triple-redundant
+  // scan that extractFiles / extractSymbolChanges / extractTypeCatalog each
+  // performed independently, each re-scanning the same tool results with
+  // overlapping regex patterns.
+  const fileAndSymbols = extractFileAndSymbolData(blocks, tri);
+
   const briefSections = buildBriefSections(blocks);
   const sessionGoal = extractGoals(blocks);
   const userPreferences = dedupPreferencesAgainstGoals(
     extractPreferences(blocks),
     sessionGoal,
   );
-  const typeCatalog = formatTypeCatalog(extractTypeCatalog(blocks));
-  const symbolChanges = extractSymbolChanges(blocks);
 
   return {
     sessionGoal,
     outstandingContext: extractOutstandingContext(blocks),
-    filesAndChanges: formatFileActivity(blocks),
+    filesAndChanges: formatFileActivityFromUnified(fileAndSymbols),
     commits: formatCommits(extractCommits(blocks)),
     userPreferences,
-    typeCatalog,
-    symbolChanges,
+    typeCatalog: formatTypeCatalogFromUnified(fileAndSymbols),
+    symbolChanges: fileAndSymbols.symbolChanges,
     currentStatus: extractCurrentStatus(blocks),
     briefTranscript: stringifyBrief(briefSections),
     transcriptEntries: sectionsToTranscript(briefSections),

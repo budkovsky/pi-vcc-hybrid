@@ -1,4 +1,4 @@
-import type { NormalizedBlock } from "../types";
+import type { NormalizedBlock, ToolResultIndex } from "../types";
 import { extractPath } from "../core/tool-args";
 import { clip } from "../core/content";
 
@@ -83,7 +83,8 @@ const extractSymbolsFromContent = (content: string, filePath: string, access: "m
 
 // Try to get file content from tool_result blocks that follow a Read/Edit/Write call.
 // Returns the text content if available.
-const findToolResult = (blocks: NormalizedBlock[], callIndex: number): Extract<NormalizedBlock, { kind: "tool_result" }> | null => {
+const findToolResult = (blocks: NormalizedBlock[], callIndex: number, tri?: ToolResultIndex): Extract<NormalizedBlock, { kind: "tool_result" }> | null => {
+  if (tri) return tri.get(callIndex);
   for (let i = callIndex + 1; i < Math.min(blocks.length, callIndex + 3); i++) {
     const b = blocks[i];
     if (b.kind === "tool_result") return b as Extract<NormalizedBlock, { kind: "tool_result" }>;
@@ -91,7 +92,7 @@ const findToolResult = (blocks: NormalizedBlock[], callIndex: number): Extract<N
   return null;
 };
 
-export const extractSymbolChanges = (blocks: NormalizedBlock[]): SymbolRef[] => {
+export const extractSymbolChanges = (blocks: NormalizedBlock[], tri?: ToolResultIndex): SymbolRef[] => {
   const refs: SymbolRef[] = [];
   const seen = new Set<string>();
 
@@ -125,7 +126,7 @@ export const extractSymbolChanges = (blocks: NormalizedBlock[]): SymbolRef[] => 
 
     // Source 2: Parse Read/Edit tool_result for exported declarations
     if (isRead || isWrite) {
-      const result = findToolResult(blocks, i);
+      const result = findToolResult(blocks, i, tri);
       if (result && result.text && !result.isError) {
         const capped = result.text.split("\n").slice(0, 300).join("\n");
         const syms = extractSymbolsFromContent(capped, filePath, access);
