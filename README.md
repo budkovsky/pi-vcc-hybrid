@@ -432,6 +432,77 @@ Typical workflow: **search → find relevant entry indices → expand those indi
 
 > Some tool results are truncated by Pi core at save time. `expand` returns everything in the JSONL but can't recover what Pi already cut.
 
+## Performance
+
+pi-vcc processes 3.7 MB sessions (2,600 messages, 3,000 blocks) in **~31 ms** — no LLM calls, no I/O waits beyond reading the session JSONL. Below are the optimizations that got us there.
+
+### Pipeline profile (3.7 MB session)
+
+| Stage | Time | % of total |
+|---|---|---|
+| `normalize` | 4 ms | 13% |
+| `filterNoise` | <1 ms | <1% |
+| `buildToolResultIndex` | <1 ms | <1% |
+| **`extractFileAndSymbolData`** | **23 ms** | **74%** |
+| Other extractors | <1 ms | <1% |
+| `buildBriefSections` | 1 ms | 4% |
+| `formatSummary` + merge | ~2 ms | 7% |
+| **Total** | **~31 ms** | |
+
+### Optimizations
+
+#### Catastrophic backtracking fix (`C_FUNC_RE`)
+
+The C/C++ function-declaration regex used a repeated group `(?:\w+(?:\s*[*&]+\s*)?)+` that triggered exponential backtracking on long non-matching identifiers (e.g. `createAssistantMessageEventStream`). A single pathological line took **1.2 s**; a session with many such lines could stall compaction for seconds.
+
+Replaced with a lazy-quantifier pattern `\w[\w:*&\s]*?` and a negative lookahead to skip Go `func` lines. The same line now takes **<0.1 ms** — a **>1000×** speedup. This was the root cause of the original "slow compaction" report on 170k-token sessions.
+
+#### Unified symbol extraction (`extractFileAndSymbolData`)
+
+Previously, three independent extractors (`extractFiles`, `extractSymbolChanges`, `extractTypeCatalog`) each scanned the same tool results with overlapping regex patterns — a **triple-redundant parse**. The unified `extractFileAndSymbolData()` in `shared-symbols.ts` does it once and feeds all three consumers from a single pass.
+
+Also added `ToolResultIndex` and `buildToolResultIndex()` to pre-compute the tool_call → tool_result look-ahead map once, shared across all extractors instead of each scanning forward independently.
+
+#### `DECL_SCREEN_RE` pre-filter
+
+Each line was tested against a 15-regex cascade to find declaration names. ~60% of lines in a real session are body code, comments, or blank — none can match, yet every line ran all 15 tests.
+
+`DECL_SCREEN_RE` is a single anchored regex that rejects non-declaration lines in one test. Matching lines then fall through to the full cascade. Measured at **2.6× faster** for the `parseDeclName` stage.
+
+#### `eachLine()` generator replaces `split().slice()`
+
+`extractSymbolsFromText` used `text.split("\n").slice(0, N)` to read the first N lines — allocating a full temporary string array every call. Over 600+ tool results in a large session, this added up to ~18 ms of allocation overhead.
+
+Replaced with an `eachLine()` generator using `indexOf("\n")` + `slice()` — zero intermediate array allocation. Produces identical iteration behavior.
+
+#### `Set`-based dedup replaces `Array.includes()`
+
+Symbol dedup used `Array.includes()` on value arrays that grew to 200+ entries per file — O(n) per check. A parallel `Map<string, Set<string>>` makes dedup O(1). Measured at **5.7× faster** for dedup operations.
+
+#### `Intl.Segmenter` → regex word split
+
+`brief.ts` used `Intl.Segmenter` for token-aware truncation, which allocated granular objects per word. Replaced with `\p{L}[\p{L}\p{N}]*|\p{N}+` regex — identical output, ~2× faster, zero object allocation.
+
+#### `convertToLlm()` elimination
+
+The `before-compact` hook called `convertToLlm()` to transform messages into an LLM message format before processing. Since pi-vcc processes messages algorithmically via `normalize()` (which already handles `user`, `assistant`, `toolResult`, and `bashExecution` directly), this conversion was both lossy (flattened bash `command`/`output`/`exitCode` into plain text) and wasteful. Removed entirely.
+
+#### Missing `read` in `FILE_READ_TOOLS`
+
+pi's built-in file-read tool uses the lowercase `read` tool name, but `FILE_READ_TOOLS` only contained `Read`. All read operations were invisible to file-activity and symbol extraction — a correctness fix, not strictly a performance fix, but it meant the symbol extractor was silently skipping data it should have processed.
+
+### Summary
+
+| Optimization | Impact |
+|---|---|
+| `C_FUNC_RE` backtracking fix | 1.2 s → <0.1 ms per line (>1000×) |
+| Unified symbol extraction | 3× fewer redundant scans |
+| `DECL_SCREEN_RE` pre-filter | 2.6× faster `parseDeclName` |
+| `eachLine()` generator | ~18 ms saved on large sessions |
+| `Set`-based dedup | 5.7× faster symbol dedup |
+| Regex word split | 2× faster token truncation |
+| `convertToLlm()` removal | Eliminated redundant message conversion |
+
 ## Pipeline
 
 1. **Normalize** — raw Pi messages → uniform blocks (user, assistant, tool_call, tool_result, thinking, bash)
