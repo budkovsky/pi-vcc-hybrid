@@ -7,7 +7,7 @@ const FILE_WRITE_TOOLS = new Set([
 ]);
 
 const FILE_READ_TOOLS = new Set([
-  "Read", "read_file", "View",
+  "Read", "read", "read_file", "View",
 ]);
 
 const FILE_CREATE_TOOLS = new Set([
@@ -46,7 +46,7 @@ const JAVA_METHOD_RE =
 const C_TYPE_RE =
   /^\s*(?:typedef\s+)?(?:struct|class|enum|union)\s+(\w+)/;
 const C_FUNC_RE =
-  /^\s*(?:(?:static|extern|inline|virtual)\s+)?(?:\w+(?:\s*[*&]+\s*)?)+(\w+)\s*\(/;
+  /^\s*(?!func\b)(?:(?:static|extern|inline|virtual)\s+)?[\w][\w:*&\s]*?(\b\w+)\s*\(/;
 
 const RUBY_DEF_RE =
   /^\s*def\s+(?:self\.)?(\w+)/;
