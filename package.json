@@ -19,8 +19,8 @@
     "typebox": ">=1.1.24 <2.0.0"
   },
   "devDependencies": {
-    "typescript": "^6.0.3",
-    "knip": "^5.55.0"
+    "typescript": "6.0.3",
+    "knip": "6.14.1"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
