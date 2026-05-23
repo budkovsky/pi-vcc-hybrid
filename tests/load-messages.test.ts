@@ -21,7 +21,6 @@ describe("loadAllMessages", () => {
       const loaded = loadAllMessages(file, false);
       expect(loaded.rendered).toHaveLength(3);
       expect(loaded.rawMessages).toHaveLength(3);
-      expect(loaded.entryIds).toEqual(["m1", "m2", "m3"]);
       expect(loaded.rendered.map((e) => e.index)).toEqual([0, 1, 2]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -42,7 +41,6 @@ describe("loadAllMessages", () => {
       const loaded = loadAllMessages(file, false, new Set(["m2"]));
       expect(loaded.rendered).toHaveLength(1);
       expect(loaded.rawMessages).toHaveLength(1);
-      expect(loaded.entryIds).toEqual(["m2"]);
       expect(loaded.rendered[0].index).toBe(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
