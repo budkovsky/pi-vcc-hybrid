@@ -555,6 +555,24 @@ Config lives at `~/.pi/agent/pi-vcc-config.json` (auto-scaffolded on first load 
 
 - [VCC](https://github.com/lllyasviel/VCC) — the original transcript-preserving conversation compiler
 - [Pi](https://github.com/badlogic/pi-mono) — the AI coding agent this extension is built for
+- [DeepSeek-V4](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/DeepSeek_V4.pdf) — hybrid attention architecture (CSA/HCA/SWA, Lightning Indexer, Attention Sink, Quick Instruction, on-disk KV cache) that directly inspired pi-vcc's multi-resolution transcript, resolution detection, task-boundary cut, and anchors
+
+### DeepSeek-V4 Architecture Mapping
+
+pi-vcc operates at the application layer, but maps closely to DeepSeek-V4's model-internal attention architecture — both solve the same problem of making compressed context feel like full context:
+
+| DeepSeek-V4 Technique | pi-vcc Equivalent | Shared Principle |
+|---|---|---|
+| **CSA** (light compression, m=4) | `[Files And Changes]`, `[Type Catalog]` | Medium-fidelity: keeps structure but drops full content |
+| **HCA** (heavy compression, m'=128) | `[Earlier Turns]` | Heaviest compression: one-liner per conversational turn |
+| **Sliding Window Attention** (n_win=128) | Brief transcript rolling window + `[Current Status]` | Uncompressed recent context for local fidelity |
+| **Lightning Indexer** (top-k sparse selection) | `vcc_recall` (BM25 + regex) | Selective, not exhaustive, access to compressed memory |
+| **Attention Sink** (near-zero on stale entries) | `[RESOLVED]` tag on fixed errors | Let the consumer gracefully ignore stale compressed context |
+| **On-disk KV cache** (prefix reuse) | Raw JSONL recall via `vcc_recall` | Lossless cold store alongside compressed hot context |
+| **Quick Instruction** (cache reuse for aux tasks) | `[Anchors]` (zero-tool-call recall) | Self-serve lookups from already-present context |
+| **Contextual Parallelism** (boundary alignment) | Task-boundary-aware cut | Compression segments align to meaningful units, not arbitrary positions |
+| **Hybrid precision** (BF16+FP8, cache-aligned) | Cache-friendly section ordering | Stable prefix survives across compactions for prompt caching |
+| **Interleaved thinking preservation** | Brief transcript preservation | Discarding intermediate reasoning forces reconstruction from scratch |
 
 ## License
 
