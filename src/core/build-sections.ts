@@ -16,7 +16,7 @@ import { buildBriefSections, identifyTurns, sectionsToTranscript, stringifyBrief
  * forward independently — tripling the look-ahead cost and the regex parsing
  * of tool results. The index collapses that to a single O(n) pre-scan.
  */
-export const buildToolResultIndex = (blocks: NormalizedBlock[]): ToolResultIndex => {
+const buildToolResultIndex = (blocks: NormalizedBlock[]): ToolResultIndex => {
   const map = new Map<number, Extract<NormalizedBlock, { kind: "tool_result" }>>();
   for (let i = 0; i < blocks.length; i++) {
     if (blocks[i].kind !== "tool_call") continue;

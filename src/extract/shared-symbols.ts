@@ -63,7 +63,7 @@ const GO_DECL_RE =
 const GO_SIG_RE =
   /^\s*func\s+(?:\(\w+\s+\*?\w+\)\s+)?\w+\s*(?:\([^)]*\))?\s*(?:\([^)]*\))?/;
 
-export interface SymbolInfo {
+interface SymbolInfo {
   /** Simple declaration name (used by files.ts, symbol-changes.ts) */
   name: string;
   /** Declaration kind */
@@ -72,7 +72,7 @@ export interface SymbolInfo {
   signature?: string;
 }
 
-export interface ToolCallSymbols {
+interface ToolCallSymbols {
   /** Symbols found in the tool_result text */
   resultSymbols: SymbolInfo[];
   /** Symbols found in Edit/Write args (newText/content) */
@@ -176,14 +176,14 @@ const extractSymbolsFromText = (text: string, maxLines: number, includeSigs: boo
   return names;
 };
 
-export interface FileActivity {
+interface FileActivity {
   read: Set<string>;
   modified: Set<string>;
   created: Set<string>;
   symbols: Map<string, string[]>;
 }
 
-export interface ExportSig {
+interface ExportSig {
   file: string;
   signatures: string[];
   modified: boolean;

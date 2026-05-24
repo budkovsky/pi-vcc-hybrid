@@ -488,6 +488,4 @@ export const identifyTurns = (blocks: NormalizedBlock[]): TurnInfo[] => {
   return turns;
 };
 
-/** Convenience: build sections from blocks and stringify to text */
-export const compileBrief = (blocks: NormalizedBlock[]): string =>
-  stringifyBrief(buildBriefSections(blocks));
+
