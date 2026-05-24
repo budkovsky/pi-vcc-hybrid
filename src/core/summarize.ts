@@ -19,8 +19,10 @@ const HEADER_NAMES = [
   "User Preferences",
   "Files And Changes",
   "Commits",
+  "Anchors",
   "Type Catalog",
   "Outstanding Context",
+  "Earlier Turns",
   "Current Status",
 ];
 
@@ -60,7 +62,7 @@ const briefOf = (text: string): string => {
 /** Merge a header section */
 const mergeHeaderSection = (header: string, prev: string, fresh: string): string => {
   // Outstanding Context, Type Catalog, and Current Status are volatile -- always use fresh only
-  if (header === "Outstanding Context" || header === "Type Catalog" || header === "Current Status") return fresh;
+  if (header === "Outstanding Context" || header === "Type Catalog" || header === "Current Status" || header === "Anchors") return fresh;
   if (!prev) return fresh;
   if (!fresh) return prev;
 
@@ -74,7 +76,7 @@ const mergeHeaderSection = (header: string, prev: string, fresh: string): string
   const prevLines = prev.split("\n").filter(isClean);
   const freshLines = fresh.split("\n").filter(isClean);
   const combined = [...new Set([...prevLines, ...freshLines])];
-  const CAP = header === "Session Goal" ? 8 : header === "Commits" ? 8 : 15;
+  const CAP = header === "Session Goal" ? 8 : header === "Commits" ? 8 : header === "Earlier Turns" ? 15 : 15;
   const capped = combined.length > CAP ? combined.slice(-CAP) : combined;
   if (capped.length === 0) return "";
   return `[${header}]\n${capped.join("\n")}`;

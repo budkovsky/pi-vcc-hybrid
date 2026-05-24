@@ -138,10 +138,40 @@ function buildOwnCut(branchEntries: any[]): OwnCutResult {
   if (liveMessages.length === 0) return { ok: false, reason: "no_live_messages" };
   if (liveMessages.length <= 2) return { ok: false, reason: "too_few_live_messages" };
 
-  // Summarize all messages, keep only the last user message as context
+  // Task-boundary-aware cut: find the last user message whose response cycle
+  // is complete (no unmatched tool calls). If the turn is mid-flight, push the
+  // cut back to the previous user message to keep the entire in-progress turn
+  // in the tail.
   let cutIdx = liveMessages.length - 1;
   while (cutIdx > 0 && liveMessages[cutIdx].message.role !== "user") {
     cutIdx--;
+  }
+
+  // Check if the turn following the last user message is "in progress"
+  // (has an unmatched toolCall — assistant started but didn't finish)
+  if (cutIdx > 0) {
+    const toolCallIds = new Set<string>();
+    const toolResultIds = new Set<string>();
+    for (let i = cutIdx + 1; i < liveMessages.length; i++) {
+      const msg = liveMessages[i].message;
+      if (msg.role === "user") break; // next turn starts
+      const content = msg.content;
+      if (typeof content === "string" || !Array.isArray(content)) continue;
+      for (const part of content) {
+        if (part.type === "toolCall" && part.id) toolCallIds.add(part.id);
+        if (part.type === "toolResult" && part.toolCallId) toolResultIds.add(part.toolCallId);
+      }
+    }
+    const hasUnmatchedToolCall = [...toolCallIds].some(id => !toolResultIds.has(id));
+    if (hasUnmatchedToolCall) {
+      // Push cut back to the previous user message
+      for (let i = cutIdx - 1; i > 0; i--) {
+        if (liveMessages[i].message.role === "user") {
+          cutIdx = i;
+          break;
+        }
+      }
+    }
   }
 
   if (cutIdx <= 0) {

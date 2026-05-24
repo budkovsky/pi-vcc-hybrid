@@ -100,11 +100,13 @@ export const formatSummary = (
     section("User Preferences", data.userPreferences),
     section("Files And Changes", data.filesAndChanges),
     section("Commits", data.commits),
+    section("Anchors", data.anchors),
   ].filter(Boolean);
 
   const volatileSections = [
     section("Type Catalog", data.typeCatalog),
     section("Outstanding Context", data.outstandingContext),
+    section("Earlier Turns", data.turnSummaries),
     section("Current Status", data.currentStatus),
   ].filter(Boolean);
 

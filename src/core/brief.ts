@@ -386,6 +386,108 @@ export const sectionsToTranscript = (sections: BriefLine[]): TranscriptEntry[] =
   return entries;
 };
 
+// ── turn identification (HCA zone) ──
+
+const WRITE_TOOLS = new Set([
+  "Edit", "Write", "edit", "write", "MultiEdit",
+]);
+
+export interface TurnInfo {
+  /** Per-turn one-line summary */
+  summary: string;
+}
+
+/** Shorten a file path by taking the last 2 segments. */
+const shortenPath = (p: string): string => {
+  const parts = p.split("/");
+  return parts.length > 2 ? parts.slice(-2).join("/") : p;
+};
+
+/**
+ * Synthesize a one-line summary for a conversational turn.
+ * No LLM — purely algorithmic compression.
+ */
+const synthesizeTurnSummary = (
+  userText: string | null,
+  toolActions: string[],
+): string => {
+  const parts: string[] = [];
+
+  // What was asked (truncated aggressively for HCA zone)
+  if (userText && userText.length > 3) {
+    parts.push(clip(userText, 50));
+  }
+
+  // Key actions — dedup and cap
+  const uniqueActions = [...new Set(toolActions)].slice(0, 5);
+  if (uniqueActions.length > 0) {
+    const edits = uniqueActions.filter(a => a.startsWith("edited"));
+    const others = uniqueActions.filter(a => !a.startsWith("edited"));
+    if (edits.length > 0 && others.length <= 2) {
+      parts.push(uniqueActions.join(", "));
+    } else if (edits.length > 0) {
+      parts.push(edits.join(", "));
+      if (others.length > 0) parts.push(`+${others.length} more`);
+    } else {
+      parts.push(uniqueActions.join(", "));
+    }
+  }
+
+  return parts.join(" \u2192 ") || "(no actions)";
+};
+
+/**
+ * Identify conversational turns and produce one-liner summaries.
+ *
+ * Each turn starts at a user/bash block and continues through assistant
+ * responses, tool calls, and tool results until the next user/bash block.
+ * This is the HCA zone — the heaviest compression layer that covers turns
+ * that would otherwise fall off the brief transcript's capBrief cutoff.
+ */
+export const identifyTurns = (blocks: NormalizedBlock[]): TurnInfo[] => {
+  const turns: TurnInfo[] = [];
+  let currentUserText: string | null = null;
+  const toolActions: string[] = [];
+
+  const flush = () => {
+    if (currentUserText === null && toolActions.length === 0) return;
+    turns.push({
+      summary: synthesizeTurnSummary(currentUserText, toolActions),
+    });
+    currentUserText = null;
+    toolActions.length = 0;
+  };
+
+  for (const b of blocks) {
+    if (b.kind === "user" || b.kind === "bash") {
+      flush();
+      currentUserText = b.kind === "user"
+        ? truncateTokens(collapseSkillText(b.text), 12)
+        : `$ ${compressBash(b.command)}`;
+      continue;
+    }
+    if (b.kind === "tool_call") {
+      if (!b.name || b.name.trim() === "") continue;
+      const path = extractPath(b.args);
+      const isWrite = WRITE_TOOLS.has(b.name);
+      if (isWrite && path) {
+        toolActions.push(`edited ${shortenPath(path)}`);
+      } else if (path) {
+        toolActions.push(`${b.name.toLowerCase()} ${shortenPath(path)}`);
+      } else if (b.name === "bash" || b.name === "Bash") {
+        const raw = (b.args.command ?? "") as string;
+        const cmd = compressBash(raw);
+        if (cmd) toolActions.push(`ran ${cmd}`);
+      } else {
+        toolActions.push(b.name.toLowerCase());
+      }
+    }
+  }
+  flush();
+
+  return turns;
+};
+
 /** Convenience: build sections from blocks and stringify to text */
-const compileBrief = (blocks: NormalizedBlock[]): string =>
+export const compileBrief = (blocks: NormalizedBlock[]): string =>
   stringifyBrief(buildBriefSections(blocks));

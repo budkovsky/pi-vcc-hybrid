@@ -6,7 +6,7 @@ import { extractPath } from "./tool-args";
 import { extractFileAndSymbolData } from "../extract/shared-symbols";
 import { extractPreferences, dedupPreferencesAgainstGoals } from "../extract/preferences";
 import { extractCommits, formatCommits } from "../extract/commits";
-import { buildBriefSections, sectionsToTranscript, stringifyBrief } from "./brief";
+import { buildBriefSections, identifyTurns, sectionsToTranscript, stringifyBrief } from "./brief";
 
 /**
  * Build a one-time look-ahead index: for each tool_call block, find the
@@ -72,15 +72,36 @@ const priorityTag = (item: string): string => {
   return `${PRIORITY_WARN} ${item}`;
 };
 
+// Write-tool names used for resolution detection
+const FILE_EDIT_TOOLS = new Set([
+  "Edit", "Write", "edit", "write", "MultiEdit",
+]);
+
+/** Extract file path from a [tsc] error line like "src/auth.ts(5,18): error TS2304: ..." */
+const extractTscFile = (item: string): string | null => {
+  const m = item.match(/^\[tsc\]\s+(\S+)\(\d+,\d+\)/);
+  return m ? m[1] : null;
+};
+
+/** Check if a tsc error's file was edited at a position after the error. */
+const isTscResolved = (file: string, tailIdx: number, editPositions: Map<number, Set<string>>): boolean => {
+  for (const [pos, files] of editPositions) {
+    if (pos > tailIdx && files.has(file)) return true;
+  }
+  return false;
+};
+
 const extractOutstandingContext = (blocks: NormalizedBlock[]): string[] => {
   const items: string[] = [];
+  const itemTailIndices: number[] = [];
   const seen = new Set<string>();
   const tail = blocks.slice(-25);
 
-  const push = (item: string) => {
+  const push = (item: string, tailIndex?: number) => {
     if (!seen.has(item)) {
       seen.add(item);
       items.push(item);
+      itemTailIndices.push(tailIndex ?? -1);
     }
   };
 
@@ -99,12 +120,15 @@ const extractOutstandingContext = (blocks: NormalizedBlock[]): string[] => {
 
     // 2. TypeScript compiler errors in bash output
     // Scan only the first BASH_OUTPUT_SCAN_LIMIT chars — errors appear at start of output
+    // Now includes file path (e.g., src/auth.ts(5,18): error TS2304:) for resolution detection
     if (b.kind === "bash" && b.output) {
       const outputHead = b.output.slice(0, BASH_OUTPUT_SCAN_LIMIT);
       if (TSC_ERROR_RE.test(outputHead)) {
-        const tsErrors = outputHead.match(new RegExp(TSC_ERROR_RE.source, "g"))?.slice(0, 3);
-        if (tsErrors) {
-          for (const e of tsErrors) push(`[tsc] ${clip(e, 150)}`);
+        const tsLines = outputHead.split("\n")
+          .filter(l => TSC_ERROR_RE.test(l.trim()))
+          .slice(0, 3);
+        for (const line of tsLines) {
+          push(`[tsc] ${clip(line.trim(), 150)}`, bi);
         }
         continue;
       }
@@ -140,11 +164,13 @@ const extractOutstandingContext = (blocks: NormalizedBlock[]): string[] => {
     if (b.kind === "tool_result" && b.isError) {
       // Check for tsc errors in tool result text first
       if (TSC_ERROR_RE.test(b.text)) {
-        const tsErrors = b.text.match(new RegExp(TSC_ERROR_RE.source, "g"))?.slice(0, 3);
-        if (tsErrors) {
-          for (const e of tsErrors) push(`[tsc] ${clip(e, 150)}`);
-          continue;
+        const tsLines = b.text.split("\n")
+          .filter(l => TSC_ERROR_RE.test(l.trim()))
+          .slice(0, 3);
+        for (const line of tsLines) {
+          push(`[tsc] ${clip(line.trim(), 150)}`, bi);
         }
+        continue;
       }
       // Check for test failures
       if (TEST_FAIL_RE.test(b.text)) {
@@ -171,7 +197,29 @@ const extractOutstandingContext = (blocks: NormalizedBlock[]): string[] => {
     }
   }
 
-  return items.slice(0, 8).map(priorityTag);
+  // Resolution detection: pre-compute edit positions in the tail so we can
+  // check whether tsc errors were subsequently fixed by an edit to the same file.
+  const editPositions = new Map<number, Set<string>>();
+  for (let i = 0; i < tail.length; i++) {
+    const b = tail[i];
+    if (b.kind === "tool_call" && FILE_EDIT_TOOLS.has(b.name)) {
+      const path = extractPath(b.args);
+      if (path) {
+        if (!editPositions.has(i)) editPositions.set(i, new Set());
+        editPositions.get(i)!.add(path);
+      }
+    }
+  }
+
+  // Apply priority tags, marking resolved tsc errors as [RESOLVED]
+  return items.slice(0, 8).map((item, idx) => {
+    const tailIdx = itemTailIndices[idx] ?? -1;
+    const file = extractTscFile(item);
+    const resolved = tailIdx >= 0 && file !== null && isTscResolved(file, tailIdx, editPositions);
+    if (!resolved) return priorityTag(item);
+    const tagged = priorityTag(item);
+    return tagged.replace(/^\[(ERROR|WARN)\]/, "[RESOLVED]");
+  });
 };
 
 const formatFileActivityFromUnified = (data: import("../extract/shared-symbols").UnifiedExtractResult): string[] => {
@@ -290,6 +338,56 @@ const extractCurrentStatus = (blocks: NormalizedBlock[]): string[] => {
   return items.slice(0, 3);
 };
 
+/**
+ * Extract structured reference anchors from already-built section data.
+ * These let the model self-serve common lookups without calling vcc_recall.
+ */
+const extractAnchors = (data: SectionData): string[] => {
+  const lines: string[] = [];
+
+  // Commit hashes
+  const commitHashes: string[] = [];
+  for (const line of data.commits) {
+    const hashMatch = line.match(/^-\s*([a-f0-9]{7,40}):/);
+    if (hashMatch) commitHashes.push(hashMatch[1]);
+  }
+  if (commitHashes.length > 0) {
+    lines.push(`commits: ${commitHashes.join(", ")}`);
+  }
+
+  // Error IDs from outstanding context
+  const errorIds: string[] = [];
+  for (const line of data.outstandingContext) {
+    const tscMatch = line.match(/TS(\d{4,5})/);
+    if (tscMatch) errorIds.push(`TS${tscMatch[1]}`);
+  }
+  if (errorIds.length > 0) {
+    lines.push(`errors: ${[...new Set(errorIds)].join(", ")}`);
+  }
+
+  // Key file paths from Files And Changes
+  const filePaths: string[] = [];
+  for (const line of data.filesAndChanges) {
+    const categoryMatch = line.match(/^-\s*(?:Modified|Created|Read):\s*(.*)/);
+    if (!categoryMatch) continue;
+    const pathPart = categoryMatch[1]
+      .replace(/\s*\([^)]*\)/g, "")
+      .replace(/\s*\(\+\d+ more\)\s*$/, "");
+    for (const p of pathPart.split(",")) {
+      const trimmed = p.trim();
+      if (trimmed) filePaths.push(trimmed);
+    }
+  }
+  if (filePaths.length > 0) {
+    const display = filePaths.length <= 15
+      ? filePaths.join(", ")
+      : `${filePaths.slice(0, 12).join(", ")} (+${filePaths.length - 12} more)`;
+    lines.push(`files: ${display}`);
+  }
+
+  return lines;
+};
+
 export const buildSections = (input: BuildSectionsInput): SectionData => {
   const { blocks } = input;
   // Build tool-call → tool-result look-ahead index once, share across extractors.
@@ -308,16 +406,26 @@ export const buildSections = (input: BuildSectionsInput): SectionData => {
     sessionGoal,
   );
 
-  return {
+  const turnSummaries = identifyTurns(blocks).map(t => t.summary);
+  const outstandingContext = extractOutstandingContext(blocks);
+
+  const result: SectionData = {
     sessionGoal,
-    outstandingContext: extractOutstandingContext(blocks),
+    outstandingContext,
     filesAndChanges: formatFileActivityFromUnified(fileAndSymbols),
     commits: formatCommits(extractCommits(blocks)),
     userPreferences,
     typeCatalog: formatTypeCatalogFromUnified(fileAndSymbols),
     symbolChanges: fileAndSymbols.symbolChanges,
     currentStatus: extractCurrentStatus(blocks),
+    turnSummaries,
+    anchors: [],  // populated after initial section data is built
     briefTranscript: stringifyBrief(briefSections),
     transcriptEntries: sectionsToTranscript(briefSections),
   };
+
+  // Anchors depend on other sections, so extract after building them
+  result.anchors = extractAnchors(result);
+
+  return result;
 };

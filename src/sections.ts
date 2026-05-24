@@ -13,6 +13,10 @@ export interface SectionData {
   symbolChanges: SymbolRef[];
   /** Current working context: what's being worked on, last action, next steps */
   currentStatus: string[];
+  /** Per-turn one-liner summaries for the HCA zone (heaviest compression, oldest turns) */
+  turnSummaries: string[];
+  /** Structured reference anchors for zero-tool-call recall */
+  anchors: string[];
   briefTranscript: string;
   /** Structured transcript entries (verbose object format) */
   transcriptEntries: TranscriptEntry[];

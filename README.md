@@ -163,15 +163,15 @@ pi-vcc is one of four compaction approaches in the AI coding-agent ecosystem. He
 | **Language** | TypeScript (compiled) | TypeScript (extension) | TypeScript (source) | Rust |
 | **LLM dependency** | Always required | None | Optional (session memory bypass) | Always (inline) / server-offloaded |
 | **Cut strategy** | Token-budget backwalk (20k recent) | Keep last user message | Min tokens (10k) + min text messages (5) | Context window trim |
-| **Summary format** | Markdown structured sections `## Goal` etc. | Bracket-tagged sections `[Session Goal]` | `<analysis>` scratchpad + 9-section `<summary>` | Markdown handoff |
+| **Summary format** | Markdown structured sections `## Goal` etc. | Bracket-tagged sections `[Session Goal]` + `[Anchors]` + `[Earlier Turns]` | `<analysis>` scratchpad + 9-section `<summary>` | Markdown handoff |
 | **Merge with prev** | Update prompt (LLM merges) | Header-by-header deterministic dedup | Via session memory (LLM-free) or prompt | Replaces (no merge) |
 | **File tracking** | `<read-files>` / `<modified-files>` XML tags | `[Files And Changes]` with symbol annotations | Post-compact file re-attachment (re-reads recent files) | Via server (server-managed) |
-| **Turn splitting** | Yes (`isSplitTurn` with parallel prefix summary) | No (cuts at last user message) | Via `preservedSegment` metadata | Via `InitialContextInjection` |
+| **Turn splitting** | Yes (`isSplitTurn` with parallel prefix summary) | Task-boundary-aware (pushes back on mid-flight turns) | Via `preservedSegment` metadata | Via `InitialContextInjection` |
 | **Cache awareness** | None | Section ordering (stable first for prompt cache) | Cache-sharing fork path, cache-editing microcompact, PTL retry | Server-side cache (remote path) |
 | **Hook system** | 2 hooks (`session_before_compact`, `session_compact`) | 2 hooks (before_compact, session_compact) | 3 hooks (PreCompact, SessionStart, PostCompact) | 2 hooks (PreCompact, PostCompact) |
 | **Micro compaction** | None | None | Yes (cache-editing + time-based content clear) | None |
 | **Partial compact** | None | None | Yes (`up_to` / `from` directions) | None |
-| **Error handling** | Basic | Orphan recovery (auto-fixes broken kept-entry IDs) | PTL retry (3x), circuit breaker (3 failures) | Backoff retry |
+| **Error handling** | Basic | Orphan recovery, resolution detection (`[RESOLVED]` tag) | PTL retry (3x), circuit breaker (3 failures) | Backoff retry |
 | **Token estimation** | chars/4 heuristic | chars/4 heuristic | `roughTokenCountEstimation` + 4/3 padding | `approx_token_count` |
 | **Determinism** | Non-deterministic (LLM) | Deterministic (no LLM) | Non-deterministic (LLM) / deterministic (SM) | Non-deterministic (LLM) / deterministic (server) |
 | **Latency** | LLM call time | 2–64ms | LLM call time (or instant with SM/micro) | LLM call time (or server-offloaded) |
@@ -182,19 +182,23 @@ pi-vcc is one of four compaction approaches in the AI coding-agent ecosystem. He
 
 - **No LLM** — purely algorithmic, zero extra API cost
 - **Brief transcript** — chronological conversation flow, each tool call collapsed to a one-liner with `(#N)` refs, text truncated to keep it compact
-- **6 semantic sections** — session goal, files & changes, type catalog, commits, outstanding context, user preferences
+- **8 semantic sections** — session goal, files & changes, type catalog, commits, outstanding context, earlier turns, anchors, user preferences
 - **Bounded merge** — rolling sections re-capped after merge instead of growing unbounded
 - **Lossless recall** — `vcc_recall` reads raw session JSONL, so active-lineage history stays searchable across compactions
 - **Scoped recall** — default search is active lineage; use `scope:"all"` for all lineages, or `scope:"compaction:N"` / `scope:"compaction:latest"` to search within a specific compaction segment's original messages
-- **Priority error tags** — outstanding context items tagged `[ERROR]`, `[WARN]`, `[INFO]` for urgency at a glance
+- **Priority error tags** — outstanding context items tagged `[ERROR]`, `[WARN]`, `[INFO]`, `[RESOLVED]` for urgency at a glance
 - **Metadata footer** — each compaction summary ends with timestamp, compression ratio, and message range
-- **Cache-friendly ordering** — stable sections (goal, preferences, files, commits) come first; volatile sections (outstanding context, current status) come last, maximizing prompt-cacheable prefix across compactions
+- **Cache-friendly ordering** — stable sections (goal, preferences, files, commits, anchors) come first; volatile sections (outstanding context, earlier turns, current status) come last, maximizing prompt-cacheable prefix across compactions
 - **Adaptive recall view** — search results grouped by conversation segments (turns) with match indicators (`>`) and context preservation, so the agent sees the conversational structure around each match
 - **Regex search** — `vcc_recall` supports regex patterns (`hook|inject`, `fail.*build`) and OR-ranked multi-word queries
 - **Result ranking** — search results ranked by BM25 term relevance, rare terms weighted higher than common ones
 - **`/pi-vcc-recall`** — slash command to search history directly, results shown as collapsible message and auto-fed to agent as context
 - **Fallback cut** — still works when Pi core returns nothing to summarize
 - **`/pi-vcc`** — manual compaction on demand
+- **Multi-resolution transcript** — three-zone brief: `[Earlier Turns]` (one-liner per conversational turn, heaviest compression), brief transcript (tool calls collapsed, medium compression), and the kept tail (uncompressed). Eliminates the information cliff where older turns vanish entirely.
+- **Error resolution detection** — tsc errors in `[Outstanding Context]` are tagged `[RESOLVED]` when the file they reference was subsequently edited, letting the model skip stale errors.
+- **Task-boundary-aware cut** — compaction splits at complete conversational turns, not mid-tool-call. If the assistant's response is in-flight (unmatched tool calls), the cut pushes back to keep the whole turn in the tail.
+- **Structured anchors** — `[Anchors]` section lists commit hashes, error IDs, and key file paths for zero-tool-call recall. The model can find references at a glance instead of calling `vcc_recall`.
 
 ## Install
 
@@ -248,11 +252,21 @@ Pi splits the conversation at the **last user message**. Everything after — th
 [Commits]
 - a1b2c3d: fix(auth): refresh token after password reset
 
+[Anchors]
+- commits: a1b2c3d
+- errors: TS2304
+- files: src/auth/session.ts, src/types.ts, tests/auth-refresh.test.ts
+
 [Outstanding Context]
-- [ERROR] [tsc] src/session.ts(5,18): error TS2304: Cannot find name 'authenticateUser'
+- [RESOLVED] [tsc] src/session.ts(5,18): error TS2304: Cannot find name 'authenticateUser'
 - [ERROR] [bash:exit 1] bun test tests/auth.test.ts → 3 tests failed
 - [WARN]  [tests] FAIL auth.test.ts > refresh token should work
 - [INFO]  [no matches] grep "verifyCredentials"
+
+[Earlier Turns]
+- Set up the project structure → read package.json, tsconfig.json
+- Install auth dependencies → ran bun add, edited package.json
+- Configure the test runner → edited bunfig.toml, ran bun test
 
 [Current Status]
 - Working on: fix the auth bug, users can't log in after password reset
@@ -291,14 +305,17 @@ Sections appear only when relevant — a session with no git commits won't have 
 | `[Files And Changes]` | Modified/created/read files from tool calls, annotated with exported symbol names (capped, paths trimmed to common root) |
 | `[Type Catalog]` | Exported signature lines from modified and read files — the public API surface the model needs for continuation |
 | `[Commits]` | Git commits made during the session (last 8, hash + first line) |
-| `[Outstanding Context]` | Unresolved items — error exit codes, test failures, tsc errors, empty search results, pending questions — tagged `[ERROR]`/`[WARN]`/`[INFO]` by severity |
+| `[Anchors]` | Structured reference points — commit hashes, error IDs, key file paths — for zero-tool-call recall |
+| `[Outstanding Context]` | Unresolved items — error exit codes, test failures, tsc errors, empty search results, pending questions — tagged `[ERROR]`/`[WARN]`/`[INFO]`/`[RESOLVED]` by severity |
+| `[Earlier Turns]` | Per-turn one-liner summaries for every conversational turn — heaviest compression layer covering turns that would otherwise fall off the brief transcript |
 | `[Current Status]` | Current focus, last file-modifying action, and next steps — extracted from the conversation tail |
 | `[User Preferences]` | Regex-extracted from user messages (`always`, `never`, `prefer`...) |
 | Brief transcript | Chronological conversation flow — rolling window of ~120 recent lines, tool calls collapsed to one-liners with `(#N)` refs |
 
 **Merge policy:**
 - `Session Goal`, `User Preferences`: concise sticky sections
-- `Outstanding Context`, `Type Catalog`, `Current Status`: volatile (replaced each compaction)
+- `Session Goal`, `User Preferences`, `Earlier Turns`: sticky sections that accumulate across compactions (capped)
+- `Outstanding Context`, `Type Catalog`, `Current Status`, `Anchors`: volatile (replaced each compaction)
 - `Files And Changes`, `Commits`: unique union across compactions
 - Brief transcript: rolling window, older lines drop off
 
@@ -314,6 +331,13 @@ Sections appear only when relevant — a session with no git commits won't have 
 | Empty grep/glob | `[no matches]` | `[no matches] Grep "verifyCredentials"` |
 | Tool error result | `[tool]` | `[bash] Command not found` |
 | Blocker text | `[user]` or plain | `[user] The build is still failing with...` |
+
+Items tagged `[RESOLVED]` when the file they reference was subsequently edited — the model can skip them:
+
+```
+- [RESOLVED] [tsc] src/auth.ts(5,18): error TS2304: Cannot find name 'authenticateUser'
+- [ERROR] [bash:exit 1] bun test tests/api.test.ts → 2 tests failed
+```
 
 All items are deduplicated — the same error won't appear twice.
 
