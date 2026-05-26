@@ -141,4 +141,24 @@ describe("searchEntries", () => {
     expect(snip).toContain("line 2");
     expect(snip).not.toContain("line 3");
   });
+
+  // ── thinking content searchability ──
+
+  it("finds terms in thinking content", () => {
+    const e: RenderedEntry[] = [
+      { index: 0, role: "user", summary: "Fix the parser" },
+      { index: 1, role: "assistant", summary: "Looking at parser" },
+    ];
+    const m: Message[] = [
+      { role: "user", content: "Fix the parser" } as any,
+      { role: "assistant", content: [
+        { type: "thinking", thinking: "The race condition is in the event emitter" },
+        { type: "text", text: "Looking at parser" },
+      ] } as any,
+    ];
+    const r = searchEntries(e, m, "race condition");
+    expect(r).toHaveLength(1);
+    expect(r[0].index).toBe(1);
+    expect(r[0].snippet).toContain("race condition");
+  });
 });

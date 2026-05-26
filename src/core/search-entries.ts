@@ -1,6 +1,6 @@
 import type { Message } from "@earendil-works/pi-ai";
 import type { RenderedEntry } from "./render-entries";
-import { textOf } from "./content";
+import { textOf, thinkingOf } from "./content";
 
 export interface SearchHit extends RenderedEntry {
   /** Context snippet around the first matched term (only when query provided) */
@@ -152,7 +152,11 @@ const fullText = (msg: Message): string => {
   if ((msg as any).role === "bashExecution") {
     return `${(msg as any).command ?? ""} ${(msg as any).output ?? ""}`;
   }
-  return textOf(msg.content);
+  // Include thinking content so recall can match against model reasoning
+  let text = textOf(msg.content);
+  const thinking = thinkingOf(msg.content);
+  if (thinking) text = thinking + "\n" + text;
+  return text;
 };
 
 export const searchEntries = (

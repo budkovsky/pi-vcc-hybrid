@@ -1,7 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import { renderMessage } from "../src/core/render-entries";
 import type { Message } from "@earendil-works/pi-ai";
-import { userMsg, assistantText, assistantWithToolCall, toolResult } from "./fixtures";
+import { userMsg, assistantText, assistantWithToolCall, assistantWithThinking, toolResult } from "./fixtures";
 
 describe("renderMessage", () => {
   it("renders user message", () => {
@@ -50,6 +50,36 @@ describe("renderMessage", () => {
     const r = renderMessage(msg, 6);
     expect(r.role).toBe("bash");
     expect(r.summary).toContain("$ exit 1");
+  });
+
+  it("renders assistant with thinking in recall output", () => {
+    const r = renderMessage(assistantWithThinking("Checking auth flow", "The bug is probably in the middleware"), 1);
+    expect(r.role).toBe("assistant");
+    expect(r.summary).toContain("[thinking]");
+    expect(r.summary).toContain("The bug is probably in the middleware");
+    expect(r.summary).toContain("Checking auth flow");
+  });
+
+  it("clips thinking in non-full mode", () => {
+    const longThinking = "x".repeat(400);
+    const r = renderMessage(assistantWithThinking("short", longThinking), 1, false);
+    expect(r.summary).toContain("[thinking]");
+    // Thinking should be clipped to ~150 chars
+    expect(r.summary.length).toBeLessThan(longThinking.length);
+  });
+
+  it("renders full thinking in full mode", () => {
+    const longThinking = "x".repeat(400);
+    const r = renderMessage(assistantWithThinking("short", longThinking), 1, true);
+    expect(r.summary).toContain("[thinking]");
+    expect(r.summary).toContain(longThinking);
+  });
+
+  it("renders assistant without thinking normally", () => {
+    const r = renderMessage(assistantText("done"), 1);
+    expect(r.role).toBe("assistant");
+    expect(r.summary).toBe("done");
+    expect(r.summary).not.toContain("[thinking]");
   });
 
   it("handles message with undefined content", () => {

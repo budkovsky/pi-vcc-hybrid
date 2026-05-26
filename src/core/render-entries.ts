@@ -1,5 +1,5 @@
 import type { Message } from "@earendil-works/pi-ai";
-import { clip, textOf } from "./content";
+import { clip, textOf, thinkingOf } from "./content";
 import { summarizeToolArgs } from "./tool-args";
 import { extractPath } from "./tool-args";
 
@@ -46,9 +46,12 @@ export const renderMessage = (msg: Message, index: number, full = false): Render
     return { index, role: "bash", summary: text };
   }
   const text = full ? textOf(msg.content) : clip(textOf(msg.content), 300);
+  const thinking = thinkingOf(msg.content);
+  const thinkDisplay = thinking ? (full ? thinking : clip(thinking, 150)) : "";
   const tools = toolCalls(msg.content);
   const files = extractFilesFromContent(msg.content);
-  const summary = tools ? `${tools}\n${text}` : text;
+  const displayText = thinkDisplay ? `[thinking] ${thinkDisplay}\n${text}` : text;
+  const summary = tools ? `${tools}\n${displayText}` : displayText;
   return { index, role: "assistant", summary, ...(files.length > 0 && { files }) };
 };
 
