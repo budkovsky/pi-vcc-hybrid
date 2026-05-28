@@ -378,6 +378,12 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
 
     lastCompactWasPiVcc = isPiVcc;
 
+    // Signal to neuralwatt-mcr that pi-vcc is handling compaction
+    // so it doesn't cancel the event. Without this flag, neuralwatt-mcr
+    // returns { cancel: true } for MCR models and pi-vcc's summary is
+    // discarded by the runner's short-circuit.
+    (event as any)._piVccOverriding = true;
+
     return {
       compaction: {
         summary,
