@@ -214,12 +214,6 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
     const isPiVcc = customInstructions === PI_VCC_COMPACT_INSTRUCTION;
     if (!isPiVcc && !settings.overrideDefaultCompaction) return;
 
-    // Neuralwatt MCR models: the server handles compaction. The
-    // neuralwatt-mcr extension will cancel this event. Bail out early
-    // to avoid computing a summary that gets thrown away.
-    const modelId = ctx?.model?.id || "";
-    if (modelId.includes("-long") && modelId.includes("neuralwatt/")) return;
-
     const ownCut = buildOwnCut(branchEntries as any[]);
     if (!ownCut.ok) {
       const lastComp = [...branchEntries].reverse().find((e: any) => e.type === "compaction");
