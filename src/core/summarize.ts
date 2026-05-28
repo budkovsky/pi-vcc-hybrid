@@ -1,5 +1,6 @@
 import type { Message } from "@earendil-works/pi-ai";
 import type { FileOps } from "../types";
+import { SECTION_DEFS } from "../sections";
 import { normalize } from "./normalize";
 import { filterNoise } from "./filter-noise";
 import { buildSections } from "./build-sections";
@@ -13,18 +14,8 @@ export interface CompileInput {
   metadata?: SummaryMetadata;
 }
 
-// Cache-friendly order: stable sections first, volatile sections last
-const HEADER_NAMES = [
-  "Session Goal",
-  "User Preferences",
-  "Files And Changes",
-  "Commits",
-  "Anchors",
-  "Type Catalog",
-  "Outstanding Context",
-  "Earlier Turns",
-  "Current Status",
-];
+// Section titles driven from SECTION_DEFS single source of truth
+const HEADER_NAMES = SECTION_DEFS.map(d => d.title);
 
 const SEPARATOR = "\n\n---\n\n";
 
@@ -59,24 +50,28 @@ const briefOf = (text: string): string => {
   return text.slice(idx + SEPARATOR.length).trim();
 };
 
-/** Merge a header section */
+/** Merge a header section — strategy driven by SECTION_DEFS */
 const mergeHeaderSection = (header: string, prev: string, fresh: string): string => {
-  // Outstanding Context, Type Catalog, and Current Status are volatile -- always use fresh only
-  if (header === "Outstanding Context" || header === "Type Catalog" || header === "Current Status" || header === "Anchors") return fresh;
+  const def = SECTION_DEFS.find(d => d.title === header);
+  // Fallback: unknown sections use fresh
+  const merge = def?.merge ?? "fresh";
+
+  // Fresh-only: volatile sections always replaced
+  if (merge === "fresh") return fresh;
   if (!prev) return fresh;
   if (!fresh) return prev;
 
-  // Files And Changes: merge by category (Modified/Created/Read), dedup paths
-  if (header === "Files And Changes") {
+  // File-union: merge Files And Changes by category, dedup paths
+  if (merge === "file-union") {
     return mergeFileLines(prev, fresh);
   }
 
-  // Session Goal, User Preferences: line-level dedup, cap
+  // Dedup: line-level dedup, cap
   const isClean = (l: string) => l.startsWith("- ") && !l.includes("<skill") && !l.includes("</skill");
   const prevLines = prev.split("\n").filter(isClean);
   const freshLines = fresh.split("\n").filter(isClean);
   const combined = [...new Set([...prevLines, ...freshLines])];
-  const CAP = header === "Session Goal" ? 8 : header === "Commits" ? 8 : header === "Earlier Turns" ? 15 : 15;
+  const CAP = header === "Session Goal" ? 8 : header === "Commits" ? 8 : 15;
   const capped = combined.length > CAP ? combined.slice(-CAP) : combined;
   if (capped.length === 0) return "";
   return `[${header}]\n${capped.join("\n")}`;
