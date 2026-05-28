@@ -555,11 +555,19 @@ Config lives at `~/.pi/agent/pi-vcc-config.json` (auto-scaffolded on first load 
 
 - [VCC](https://github.com/lllyasviel/VCC) — the original transcript-preserving conversation compiler
 - [Pi](https://github.com/badlogic/pi-mono) — the AI coding agent this extension is built for
-- [DeepSeek-V4](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/DeepSeek_V4.pdf) — hybrid attention architecture (CSA/HCA/SWA, Lightning Indexer, Attention Sink, Quick Instruction, on-disk KV cache) that directly inspired pi-vcc's multi-resolution transcript, resolution detection, task-boundary cut, and anchors
+- [DeepSeek-V4](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/DeepSeek_V4.pdf) — hybrid attention architecture that directly inspired pi-vcc's multi-resolution transcript, resolution detection, task-boundary cut, and anchors
+- [Mastra](https://mastra.ai) — Observational Memory patterns that inspired Current Status, priority error tags, cache-friendly ordering, and compaction-scoped recall
+- [Claude Code](https://github.com/anthropics/claude-code) — three-tier compaction architecture (LLM / session memory / micro-compact) that influenced cache-friendly ordering and compaction-scoped recall design
+- [Codex (OpenAI)](https://github.com/openai/codex) — Rust-based three-path compaction that inspired the handoff preamble and first-class structured compaction output
+- [VCC Paper](https://arxiv.org/abs/2603.29678) — adaptive view concept that inspired structure-preserving search results and thinking content surfacing in recall
 
-### DeepSeek-V4 Architecture Mapping
+### Inspirations & Attribution
 
-pi-vcc operates at the application layer, but maps closely to DeepSeek-V4's model-internal attention architecture — both solve the same problem of making compressed context feel like full context:
+This fork builds on the upstream `sting8k/pi-vcc` with novel features inspired by five external projects. Below is a comprehensive mapping of each inspiration source to the features it produced.
+
+#### DeepSeek-V4 — Hybrid Attention Architecture
+
+Inspired by DeepSeek-V4's CSA/HCA/SWA attention architecture, Lightning Indexer, Attention Sink, Quick Instruction, and contextual parallelism.
 
 | DeepSeek-V4 Technique | pi-vcc Equivalent | Shared Principle |
 |---|---|---|
@@ -573,6 +581,66 @@ pi-vcc operates at the application layer, but maps closely to DeepSeek-V4's mode
 | **Contextual Parallelism** (boundary alignment) | Task-boundary-aware cut | Compression segments align to meaningful units, not arbitrary positions |
 | **Hybrid precision** (BF16+FP8, cache-aligned) | Cache-friendly section ordering | Stable prefix survives across compactions for prompt caching |
 | **Interleaved thinking preservation** | Brief transcript preservation | Discarding intermediate reasoning forces reconstruction from scratch |
+
+**Features delivered:**
+1. **Multi-resolution transcript** — three-zone brief: `[Earlier Turns]` (one-liner/turn), brief transcript (medium compression), kept tail (uncompressed)
+2. **Error resolution detection** — tsc errors tagged `[RESOLVED]` when the file they reference was subsequently edited
+3. **Task-boundary-aware cut** — cut point detects mid-flight turns and pushes back to keep the whole turn in the tail
+4. **Structured anchors** — `[Anchors]` section with commit hashes, error IDs, key file paths for zero-tool-call recall
+
+#### Mastra — Observational Memory
+
+Inspired by Mastra's OM patterns — treating compaction output as a structured observation layer rather than free-form prose.
+
+| Mastra OM Pattern | pi-vcc Equivalent |
+|---|---|
+| Observational memory summary | `[Current Status]` section — auto-extracted focus, last action, next steps |
+| Priority-tagged observations | `[ERROR]`/`[WARN]`/`[INFO]`/`[RESOLVED]` tags on Outstanding Context |
+| Stable-first observation ordering | Cache-friendly section ordering (stable sections first, volatile last) |
+| Per-observation metadata | Timestamp + compression-ratio metadata footer |
+| Scoped observation retrieval | Compaction-scoped `vcc_recall` (`scope:'compaction:N'`) |
+
+#### Claude Code — Three-Tier Compaction
+
+Claude Code's three-tier architecture (full LLM, session memory = LLM-free, micro-compact = cache-editing) influenced pragmatic design choices:
+
+| Claude Code Technique | pi-vcc Influence |
+|---|---|
+| Cache-sharing fork path | Cache-friendly section ordering — stable prefix survives across compactions for prompt cache hits |
+| `lastSummarizedMessageId` boundary tracking | Compaction-scoped recall — `scope:'compaction:N'` drills into specific segments |
+| Session memory (deterministic, LLM-free) | Validates the zero-LLM approach; pi-vcc achieves similar determinism via extraction instead of a separate memory pipeline |
+
+#### Codex (OpenAI) — Three-Path Compaction
+
+Codex's Rust-based compaction (inline/remote/remote-v2) inspired higher-level design decisions:
+
+| Codex Technique | pi-vcc Influence |
+|---|---|
+| `summary_prefix.md` continuation directive | Handoff preamble — continuation directive prepended to every compaction summary |
+| `ContextCompactionItem` as first-class protocol type | Structured bracket-tagged sections act as a first-class compaction artifact, not free-form prose |
+| `InitialContextInjection` control over system context | Task-boundary-aware cut ensures meaningful boundaries, not arbitrary splits |
+
+#### VCC Paper — Adaptive View
+
+The original VCC paper (arxiv.org/abs/2603.29678) introduced the adaptive view concept — preserving conversation structure and role tags in search projections.
+
+| VCC Paper Concept | pi-vcc Equivalent |
+|---|---|
+| Adaptive view (structure-preserving projection) | Structure-preserving search results — grouped by conversation segments (turns) with `>` match indicators |
+| Role tag preservation | Thinking content surfacing — `thinkingOf()` extracts model reasoning for recall display and search indexing |
+
+#### Original Novel Work
+
+Features with no external inspiration — original engineering contributions unique to this fork:
+
+1. **Deep error extraction** — captures bash exit codes `[bash:exit N]`, tsc errors `[tsc]`, test failures `[tests]`, empty grep/glob `[no matches]` with structured tags and dedup
+2. **Symbol-annotated files** — file paths annotated with exported symbol names extracted from tool call arguments and results
+3. **Type catalog** — `[Type Catalog]` section with exact exported signature lines from modified/read files
+4. **Multi-language symbol extraction** — Rust, Java, C/C++, Zig, Ruby, Elixir symbol detection with language-specific regex patterns
+5. **Performance optimization suite** — catastrophic backtracking fix (>1000×), unified extraction (3×), DECL_SCREEN_RE pre-filter (2.6×), eachLine() generator, Set-based dedup (5.7×), Intl.Segmenter replacement (2×), convertToLlm() elimination
+6. **Entry-ID-based message range** — stores entry IDs instead of branch-relative indices for correct cross-branch resolution
+7. **Neuralwatt-MCR interop** — signals compaction override so MCR models don't discard pi-vcc's summary
+8. **Supply-chain hardening** — pinned deps, npm-shrinkwrap, audit fixes
 
 ## License
 
