@@ -14,128 +14,54 @@ const FILE_CREATE_TOOLS = new Set([
   "Write", "write", "write_file",
 ]);
 
-// Declarative language configs drive parseDeclName and parseSignature.
-// Order matters: more specific patterns must come before generic fallbacks
-// (e.g., Go before C to prevent `func` false matches).
+// Declaration regexes — consolidated from files.ts, symbol-changes.ts, type-catalog.ts
+// Order: more specific patterns first, generic fallbacks last.
 
-interface LangConfig {
-  /** Regex matching a declaration line. Capture group 1 (or 2) = declaration name. */
-  declRe: RegExp;
-  /** Regex matching a signature line (for type catalog). Null = no signature extraction. */
-  sigRe: RegExp | null;
-  /** Default kind when a match is found. "infer" = compute from the match context. */
-  kind: "function" | "type" | "class" | "variable" | "infer";
-  /** For "infer" kind: return a kind based on the matched line. */
-  inferKind?: (line: string, match: RegExpMatchArray) => SymbolInfo["kind"];
-  /** Optional filter on the match. Return false to reject. */
-  filter?: (match: RegExpMatchArray) => boolean;
-  /** Optional filter on the signature line. Return false to reject. */
-  sigFilter?: (line: string) => boolean;
-  /** Which capture group holds the name (default 1). */
-  nameGroup?: number;
-}
+const TS_EXPORT_DECL_RE =
+  /^\s*export\s+(?:default\s+)?(?:async\s+)?(?:function|class|type|interface|const|let|enum)\s+(\w+)/;
+const TS_TYPE_DECL_RE =
+  /^\s*(?:export\s+)?(?:type|interface)\s+(\w+)/;
+const TS_EXPORT_SIG_RE =
+  /^\s*export\s+(?:default\s+)?(?:async\s+)?(?:function|class|type|interface|const|let|enum)\s+\w+[^;{]*[;{]?/;
 
-const LANG_CONFIGS: LangConfig[] = [
-  // TypeScript / JavaScript
-  {
-    declRe: /^\s*export\s+(?:default\s+)?(?:async\s+)?(?:function|class|type|interface|const|let|enum)\s+(\w+)/,
-    sigRe: /^\s*export\s+(?:default\s+)?(?:async\s+)?(?:function|class|type|interface|const|let|enum)\s+\w+[^;{]*[;{]?/,
-    kind: "infer",
-    inferKind: (line) =>
-      line.includes("function") ? "function"
-      : line.includes("class") ? "class"
-      : line.includes("type") ? "type"
-      : line.includes("interface") ? "type"
-      : line.includes("enum") ? "variable"
-      : "variable",
-  },
-  {
-    declRe: /^\s*(?:export\s+)?(?:type|interface)\s+(\w+)/,
-    sigRe: null,
-    kind: "type",
-  },
-  // Rust
-  {
-    declRe: /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?(?:fn|struct|enum|trait|type|const|union|var)\s+(\w+)/,
-    sigRe: /^\s*pub\s+(?:async\s+)?(?:fn|struct|enum|trait|type)\s+\w+/,
-    kind: "function",
-  },
-  {
-    declRe: /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?impl\s+(?:<[^>]+>\s+)?(\w+)(?:\s+for\s+(\w+))?/,
-    sigRe: null,
-    kind: "class",
-  },
-  // Elixir
-  {
-    declRe: /^\s*defmodule\s+(\w+)/,
-    sigRe: null,
-    kind: "class",
-  },
-  {
-    declRe: /^\s*def(?:struct|protocol|impl)\s+(\w+)/,
-    sigRe: null,
-    kind: "class",
-  },
-  {
-    declRe: /^\s*def(?:p|macro|macrop|guard|guardp)?\s+(\w+)/,
-    sigRe: null,
-    kind: "function",
-  },
-  // Java
-  {
-    declRe: /^\s*(?:(?:public|private|protected)\s+)?(?:abstract\s+|static\s+|final\s+|sealed\s+)?(?:class|interface|enum|@interface|record)\s+(\w+)/,
-    sigRe: null,
-    kind: "class",
-  },
-  {
-    declRe: /^\s*(?:public|protected)\s+(?:static\s+|abstract\s+|final\s+)?(?:\S+(?:\s*\[\])?\s+)(\w+)\s*\(/,
-    sigRe: null,
-    kind: "function",
-  },
-  // C / C++
-  {
-    declRe: /^\s*(?:typedef\s+)?(?:struct|class|enum|union)\s+(\w+)/,
-    sigRe: null,
-    kind: "class",
-  },
-  {
-    // Negative lookahead prevents matching Go `func` lines (Go must come first in this array)
-    declRe: /^\s*(?!func\b)(?:(?:static|extern|inline|virtual)\s+)?[\w][\w:*&\s]*?(\b\w+)\s*\(/,
-    sigRe: null,
-    kind: "function",
-  },
-  // Ruby
-  {
-    declRe: /^\s*(?:class|module)\s+(\w+)/,
-    sigRe: null,
-    kind: "class",
-  },
-  {
-    declRe: /^\s*def\s+(?:self\.)?(\w+)/,
-    sigRe: null,
-    kind: "function",
-  },
-  // Python
-  {
-    declRe: /^\s*(?:async\s+)?def\s+(\w+)|^\s*class\s+(\w+)/,
-    sigRe: /^\s*(?:async\s+)?(?:def|class)\s+\w+\s*(?:\([^)]*\))?/,
-    kind: "infer",
-    nameGroup: 0,  // special: check both group 1 and group 2
-    inferKind: (_line, match) => match[2] ? "class" : "function",
-    sigFilter: (line) => !line.trim().startsWith("def _") && !line.trim().startsWith("class _"),
-  },
-  // Go (must come before C to prevent `func` false matches)
-  {
-    declRe: /^\s*func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)/,
-    sigRe: /^\s*func\s+(?:\(\w+\s+\*?\w+\)\s+)?\w+\s*(?:\([^)]*\))?\s*(?:\([^)]*\))?/,
-    kind: "function",
-    filter: (match) => match[1][0] === match[1][0].toUpperCase(),
-    sigFilter: (line) => {
-      const nameMatch = line.match(/func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)/);
-      return !!(nameMatch?.[1] && nameMatch[1][0] === nameMatch[1][0].toUpperCase());
-    },
-  },
-];
+const RUST_DECL_RE =
+  /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?(?:fn|struct|enum|trait|type|const|union|var)\s+(\w+)/;
+const RUST_IMPL_RE =
+  /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?impl\s+(?:<[^>]+>\s+)?(\w+)(?:\s+for\s+(\w+))?/;
+const RUST_SIG_RE =
+  /^\s*pub\s+(?:async\s+)?(?:fn|struct|enum|trait|type)\s+\w+/;
+
+const ELIXIR_DEF_RE =
+  /^\s*def(?:p|macro|macrop|guard|guardp)?\s+(\w+)/;
+const ELIXIR_MODULE_RE =
+  /^\s*defmodule\s+(\w+)/;
+const ELIXIR_SPECIAL_RE =
+  /^\s*def(?:struct|protocol|impl)\s+(\w+)/;
+
+const JAVA_TYPE_RE =
+  /^\s*(?:(?:public|private|protected)\s+)?(?:abstract\s+|static\s+|final\s+|sealed\s+)?(?:class|interface|enum|@interface|record)\s+(\w+)/;
+const JAVA_METHOD_RE =
+  /^\s*(?:public|protected)\s+(?:static\s+|abstract\s+|final\s+)?(?:\S+(?:\s*\[\])?\s+)(\w+)\s*\(/;
+
+const C_TYPE_RE =
+  /^\s*(?:typedef\s+)?(?:struct|class|enum|union)\s+(\w+)/;
+const C_FUNC_RE =
+  /^\s*(?!func\b)(?:(?:static|extern|inline|virtual)\s+)?[\w][\w:*&\s]*?(\b\w+)\s*\(/;
+
+const RUBY_DEF_RE =
+  /^\s*def\s+(?:self\.)?(\w+)/;
+const RUBY_TYPE_RE =
+  /^\s*(?:class|module)\s+(\w+)/;
+
+const PY_DECL_RE =
+  /^\s*(?:async\s+)?def\s+(\w+)|^\s*class\s+(\w+)/;
+const PY_SIG_RE =
+  /^\s*(?:async\s+)?(?:def|class)\s+\w+\s*(?:\([^)]*\))?/;
+
+const GO_DECL_RE =
+  /^\s*func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)/;
+const GO_SIG_RE =
+  /^\s*func\s+(?:\(\w+\s+\*?\w+\)\s+)?\w+\s*(?:\([^)]*\))?\s*(?:\([^)]*\))?/;
 
 interface SymbolInfo {
   /** Simple declaration name (used by files.ts, symbol-changes.ts) */
@@ -153,63 +79,71 @@ interface ToolCallSymbols {
   argSymbols: SymbolInfo[];
 }
 
-// Fast screening regex: rejects lines that can't start any declaration keyword.
-// Built automatically from LANG_CONFIGS to stay in sync.
-const DECL_SCREEN_KEYWORDS = [
-  "export", "pub", "func", "def", "class", "type", "interface", "async",
-  "abstract", "static", "public", "private", "protected", "struct",
-  "enum", "trait", "impl", "module", "const", "fn", "sealed", "record",
-  "typedef", "union", "virtual", "extern", "inline",
-];
-const DECL_SCREEN_RE = new RegExp(
-  `^\\s*(?:${DECL_SCREEN_KEYWORDS.join("|")})`,
-);
+// Fast screening regex: rejects lines that can't start any declaration.
+// Avoids running the full 15-regex cascade on body code / comments / blank lines.
+const DECL_SCREEN_RE =
+  /^\s*(?:export|pub|func|def|class|type|interface|async|abstract|static|public|private|protected|struct|enum|trait|impl|module|const|fn|sealed|record|typedef|union|virtual|extern|inline)/;
 
 const parseDeclName = (line: string): { name: string; kind: SymbolInfo["kind"] } | null => {
   // Quick reject: lines that can't start any declaration keyword
   if (!DECL_SCREEN_RE.test(line)) return null;
 
-  for (const cfg of LANG_CONFIGS) {
-    const m = line.match(cfg.declRe);
-    if (!m) continue;
-
-    // Apply filter if present
-    if (cfg.filter && !cfg.filter(m)) continue;
-
-    // Resolve name
-    let name: string;
-    if (cfg.nameGroup === 0) {
-      // Python-style: name lives in group 1 or group 2
-      name = m[1] || m[2];
-    } else {
-      name = m[cfg.nameGroup ?? 1];
-    }
-    if (!name) continue;
-
-    // Resolve kind
-    const kind = cfg.kind === "infer" && cfg.inferKind
-      ? cfg.inferKind(line, m)
-      : cfg.kind === "infer" ? "unknown" : cfg.kind;
-
-    return { name, kind };
+  let m = line.match(TS_EXPORT_DECL_RE);
+  if (m) {
+    const kind = line.includes("function") ? "function"
+      : line.includes("class") ? "class"
+      : line.includes("type") ? "type"
+      : line.includes("interface") ? "type"
+      : line.includes("enum") ? "variable"
+      : "variable";
+    return { name: m[1], kind };
   }
+  m = line.match(TS_TYPE_DECL_RE);
+  if (m) return { name: m[1], kind: "type" };
+  m = line.match(RUST_DECL_RE);
+  if (m) return { name: m[1], kind: "function" };
+  m = line.match(RUST_IMPL_RE);
+  if (m) return { name: m[1], kind: "class" };
+  m = line.match(ELIXIR_MODULE_RE);
+  if (m) return { name: m[1], kind: "class" };
+  m = line.match(ELIXIR_SPECIAL_RE);
+  if (m) return { name: m[1], kind: "class" };
+  m = line.match(ELIXIR_DEF_RE);
+  if (m) return { name: m[1], kind: "function" };
+  m = line.match(JAVA_TYPE_RE);
+  if (m) return { name: m[1], kind: "class" };
+  m = line.match(JAVA_METHOD_RE);
+  if (m) return { name: m[1], kind: "function" };
+  m = line.match(C_TYPE_RE);
+  if (m) return { name: m[1], kind: "class" };
+  m = line.match(C_FUNC_RE);
+  if (m) return { name: m[1], kind: "function" };
+  m = line.match(RUBY_TYPE_RE);
+  if (m) return { name: m[1], kind: "class" };
+  m = line.match(RUBY_DEF_RE);
+  if (m) return { name: m[1], kind: "function" };
+  m = line.match(PY_DECL_RE);
+  if (m) return { name: m[1] || m[2], kind: m[2] ? "class" : "function" };
+  m = line.match(GO_DECL_RE);
+  if (m && m[1][0] === m[1][0].toUpperCase()) return { name: m[1], kind: "function" };
   return null;
 };
 
 const parseSignature = (line: string): string | null => {
-  for (const cfg of LANG_CONFIGS) {
-    if (!cfg.sigRe) continue;
-    if (!cfg.sigRe.test(line)) continue;
-    if (cfg.sigFilter && !cfg.sigFilter(line)) continue;
-    return line.trim();
+  if (TS_EXPORT_SIG_RE.test(line)) return line.trim();
+  if (PY_SIG_RE.test(line) && !line.trim().startsWith("def _") && !line.trim().startsWith("class _")) return line.trim();
+  if (GO_SIG_RE.test(line)) {
+    const nameMatch = line.match(/func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)/);
+    if (nameMatch && nameMatch[1] && nameMatch[1][0] === nameMatch[1][0].toUpperCase()) return line.trim();
   }
+  if (RUST_SIG_RE.test(line)) return line.trim();
   return null;
 };
 
 /**
  * Line-by-line iteration over text using indexOf("\n") instead of split().
  * Avoids allocating an intermediate string array — for a 300-line, 12KB
- * tool result this saves ~30μs/scan vs split(). Over 600 tool results
+ * tool result this saves ~30μs/scan vs split().  Over 600 tool results
  * in a large session, that's ~18ms reclaimed.
  */
 const eachLine = function* (text: string, maxLines: number): Generator<string> {
@@ -272,9 +206,9 @@ export interface UnifiedExtractResult {
  * Single-pass extraction of all file/symbol information from tool calls.
  *
  * Replaces the triple-redundant scan performed by:
- * - extractFiles() — path collection + 200-line symbol scan
- * - extractSymbolChanges() — 300-line symbol scan
- * - extractTypeCatalog() — 150-line signature scan
+ *   - extractFiles() — path collection + 200-line symbol scan
+ *   - extractSymbolChanges() — 300-line symbol scan
+ *   - extractTypeCatalog() — 150-line signature scan
  *
  * All three scanned the same tool_result content with overlapping regex
  * patterns. This unified pass does it once and returns all three datasets.
