@@ -15,7 +15,7 @@ export interface PiVccSettings {
    *   - auto threshold / overflow
    *   - /pi-vcc (always handled regardless)
    *
-   * When false (default), pi-vcc only handles /pi-vcc; everything else
+   * When false, pi-vcc only handles /pi-vcc; everything else
    * falls back to pi core's default LLM-based compaction.
    */
   overrideDefaultCompaction: boolean;
@@ -24,7 +24,7 @@ export interface PiVccSettings {
 }
 
 const DEFAULT_SETTINGS: PiVccSettings = {
-  overrideDefaultCompaction: false,
+  overrideDefaultCompaction: true,
   debug: false,
 };
 

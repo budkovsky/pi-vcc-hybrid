@@ -217,7 +217,7 @@ pi -e https://github.com/monotykamary/pi-vcc@tom
 Once installed, pi-vcc registers a `session_before_compact` hook.
 
 - Run `/pi-vcc` to trigger pi-vcc compaction manually.
-- By default, `/compact` and auto-threshold compactions still go through pi core (LLM-based). Set `overrideDefaultCompaction: true` in the config to let pi-vcc handle all compaction paths.
+- By default, pi-vcc handles all compaction paths (`/compact`, auto-threshold, `/pi-vcc`). Set `overrideDefaultCompaction: false` in the config to fall back to pi core's LLM-based compaction for `/compact` and auto-threshold.
 - To search older active-lineage history after compaction, use `vcc_recall`.
 - To intentionally search across all lineages, pass `scope:"all"` to `vcc_recall` or run `/pi-vcc-recall <query> scope:all`.
 - To search and feed results to agent yourself, run `/pi-vcc-recall <query> [page:N]`.
@@ -543,12 +543,12 @@ Config lives at `~/.pi/agent/pi-vcc-config.json` (auto-scaffolded on first load 
 
 ```json
 {
-  "overrideDefaultCompaction": false,
+  "overrideDefaultCompaction": true,
   "debug": false
 }
 ```
 
-- **`overrideDefaultCompaction`** *(default `false`)*: when `false`, pi-vcc only runs for `/pi-vcc`; `/compact` and auto-threshold compactions fall through to pi core. Set `true` to make pi-vcc handle all compaction paths.
+- **`overrideDefaultCompaction`** *(default `true`)*: when `true` (default), pi-vcc handles all compaction paths (`/compact`, auto-threshold, `/pi-vcc`). Set `false` to let pi core handle `/compact` and auto-threshold compactions via its default LLM-based compaction.
 - **`debug`** *(default `false`)*: when `true`, each compaction writes detailed info to `/tmp/pi-vcc-debug.json` — message counts, cut boundary, summary preview, sections.
 
 ## Related Work
