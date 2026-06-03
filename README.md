@@ -1,6 +1,17 @@
-# pi-vcc
+<div align="center">
 
-Algorithmic conversation compactor for [Pi](https://github.com/badlogic/pi-mono). No LLM calls — produces a brief transcript via extraction and formatting.
+# 🗜️ pi-vcc
+
+**Algorithmic conversation compactor for [pi](https://github.com/earendil-works/pi-coding-agent)**
+
+_No LLM calls — 35-99% token reduction via extraction and formatting. Same input = same output, always._
+
+[![pi extension](https://img.shields.io/badge/pi-extension-blueviolet)](https://github.com/earendil-works/pi-coding-agent)
+[![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+
+</div>
+
+---
 
 Inspired by [VCC](https://github.com/lllyasviel/VCC) **(View-oriented Conversation Compiler)**.
 
