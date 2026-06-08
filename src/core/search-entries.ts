@@ -12,6 +12,76 @@ export interface SearchHit extends RenderedEntry {
 const escapeRegex = (s: string): string =>
   s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+// ── British/American spelling variant expansion ──
+
+// Mapping of suffix replacements for Commonwealth/US spelling variants.
+// Each key/value pair is a suffix that should be treated as equivalent.
+// When a query term ends with one suffix, the regex is expanded to match
+// either variant. This ensures that searching "authorization" finds
+// "authorisation" and vice-versa — critical for Australian/UK government
+// sessions where the agent may use either spelling.
+const SPELLING_VARIANTS: [string, string][] = [
+  ["ise", "ize"],   // authorise/authorize, organise/organize
+  ["isation", "ization"], // authorisation/authorization
+  ["yse", "yze"],   // analyse/analyze, paralyse/paralyze
+  ["our", "or"],    // colour/color, favour/favor, behaviour/behavior
+  ["ogue", "og"],   // catalogue/catalog, dialogue/dialog
+  ["mme", "m"],     // programme/program (but only at end of word)
+  ["ence", "ense"], // defence/defense, offence/offence, licence/license
+  ["ction", "ction"], // no-op placeholder — real pairs are above
+];
+
+// More specific pairs (checked first, longer suffix = more specific)
+const SUFFIX_VARIANT_PAIRS: [RegExp, string][] = [
+  // -isation ↔ -ization (must come before -ise/-ize)
+  [/isation$/i, "i[sz]ation"],
+  [/ization$/i, "i[sz]ation"],
+  // -yse ↔ -yze
+  [/yse$/i, "y[zs]e"],
+  [/yze$/i, "y[zs]e"],
+  // -our ↔ -or (must come before -ise/-ize to avoid conflict)
+  [/our$/i, "ou?r"],
+  [/or$/i, "ou?r"],
+  // -ise ↔ -ize
+  [/ise$/i, "i[zs]e"],
+  [/ize$/i, "i[zs]e"],
+  // -ogue ↔ -og
+  [/ogue$/i, "og(?:ue)?"],
+  // -mme ↔ -m (programme/program)
+  [/mme$/i, "m(?:me)?"],
+  // -ence ↔ -ense (defence/defense, offence/offence, licence/license)
+  [/ence$/i, "en[cs]e"],
+  [/ense$/i, "en[cs]e"],
+];
+
+/**
+ * Expand a literal query term into a regex that matches both British
+ * and American spelling variants. Returns the original escaped term
+ * if no variant pattern applies.
+ *
+ * Only applies to simple word terms (no existing regex metacharacters).
+ */
+const expandSpellingVariants = (term: string): string => {
+  // Don't expand terms that already look like regex
+  if (/[|*+?{}()[\]\\^$.]/.test(term)) return term;
+  // Too short to plausibly be a suffix variant
+  if (term.length < 4) return term;
+
+  for (const [suffix, replacement] of SUFFIX_VARIANT_PAIRS) {
+    if (suffix.test(term)) {
+      const base = term.replace(suffix, "");
+      return escapeRegex(base) + replacement;
+    }
+  }
+  return term; // no variant found
+};
+
+/** Compile a term into a regex, applying spelling variant expansion. */
+const termRegex = (term: string): RegExp => {
+  const expanded = expandSpellingVariants(term);
+  return safeRegex(expanded);
+};
+
 /** Try to compile as regex; fall back to escaped literal. */
 const safeRegex = (pattern: string): RegExp => {
   try {
@@ -25,13 +95,15 @@ const safeRegex = (pattern: string): RegExp => {
 const looksLikeRegex = (query: string): boolean =>
   /[|*+?{}()[\]\\^$.]/.test(query);
 
-/** Build a regex for snippet highlighting — matches first available term. */
+/** Build a regex for snippet highlighting — matches first available term
+ *  (with spelling variant expansion). */
 const snippetRegex = (terms: string[]): RegExp => {
   const alts = terms.map((t) => {
+    const expanded = expandSpellingVariants(t);
     try {
       // Validate that it's a valid regex
-      new RegExp(t, "i");
-      return t;
+      new RegExp(expanded, "i");
+      return expanded;
     } catch {
       return escapeRegex(t);
     }
@@ -65,7 +137,7 @@ const filterStopwords = (terms: string[]): string[] => {
 const countMatches = (hay: string, terms: string[]): number => {
   let count = 0;
   for (const t of terms) {
-    if (safeRegex(t).test(hay)) count++;
+    if (termRegex(t).test(hay)) count++;
   }
   return count;
 };
@@ -110,7 +182,7 @@ const buildBM25Context = (docs: string[], terms: string[]): BM25Context => {
   for (const doc of docs) {
     totalLen += doc.split(/\s+/).length;
     for (const t of terms) {
-      if (safeRegex(t).test(doc)) {
+      if (termRegex(t).test(doc)) {
         df.set(t, (df.get(t) ?? 0) + 1);
       }
     }
@@ -125,7 +197,7 @@ const bm25Score = (doc: string, terms: string[], ctx: BM25Context): number => {
   let score = 0;
 
   for (const t of terms) {
-    const tf = termFreq(doc, safeRegex(t));
+    const tf = termFreq(doc, termRegex(t));
     if (tf === 0) continue;
 
     const docFreq = ctx.df.get(t) ?? 0;
