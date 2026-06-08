@@ -3,14 +3,12 @@ import type { FileOps } from "../types";
 import { normalize } from "./normalize";
 import { filterNoise } from "./filter-noise";
 import { buildSections } from "./build-sections";
-import { formatSummary, capBrief, RECALL_NOTE, wrapLongLines, type SummaryMetadata } from "./format";
+import { formatSummary, capBrief, RECALL_NOTE, wrapLongLines } from "./format";
 
 export interface CompileInput {
   messages: Message[];
   previousSummary?: string;
   fileOps?: FileOps;
-  /** Metadata for the summary footer (timestamp, compression ratio, etc.) */
-  metadata?: SummaryMetadata;
 }
 
 // Cache-friendly order: stable sections first, volatile sections last
@@ -160,7 +158,7 @@ const mergePrevious = (prev: string, fresh: string): string => {
 export const compile = (input: CompileInput): string => {
   const blocks = filterNoise(normalize(input.messages));
   const data = buildSections({ blocks });
-  const fresh = formatSummary(data, input.metadata);
+  const fresh = formatSummary(data);
   // Strip any legacy RECALL_NOTE baked into prev summary (pre-fix format)
   // so merge doesn't re-stack it inside the brief.
   const prev = input.previousSummary

@@ -8,4 +8,12 @@ export interface PiVccCompactionDetails {
   messageRange?: [string, string];
   /** Summarized-to-summary token ratio (rounded) */
   compressionRatio?: number;
+  /** ISO-8601 timestamp of when this compaction ran */
+  timestamp?: string;
+  /** Token count before compaction */
+  tokensBefore?: number;
+  /** Number of messages kept in tail */
+  keptCount?: number;
+  /** Estimated token count of kept tail */
+  keptTokensEst?: number;
 }

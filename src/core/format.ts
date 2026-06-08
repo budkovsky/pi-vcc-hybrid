@@ -50,39 +50,6 @@ export const RECALL_NOTE =
   "Use `vcc_recall` to search for prior work, decisions, and context from before this summary. " +
   "Do not redo work already completed.";
 
-/** Compaction metadata to show in the summary footer. */
-export interface SummaryMetadata {
-  /** ISO-8601 timestamp */
-  timestamp: string;
-  /** Number of messages summarized */
-  sourceMessageCount: number;
-  /** Token count before compaction */
-  tokensBefore: number;
-  /** Number of messages kept in tail */
-  keptCount: number;
-  /** Estimated token count of kept tail */
-  keptTokensEst: number;
-  /** Entry IDs [firstSummarizedId, lastSummarizedId] for compaction-scoped recall */
-  messageRange?: [string, string];
-}
-
-const formatTokens = (n: number): string => {
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-  return String(n);
-};
-
-/** Build the metadata footer line. */
-const formatMetadataFooter = (meta: SummaryMetadata): string => {
-  const compression = meta.tokensBefore > 0
-    ? ` (${Math.round(meta.tokensBefore / Math.max(1, meta.sourceMessageCount))}x)`
-    : "";
-  return [
-    `---`,
-    `Compaction at ${meta.timestamp} \u2014 ${meta.sourceMessageCount} msgs \u2192 ${formatTokens(meta.tokensBefore)} tok${compression}` +
-      ` | tail: ${meta.keptCount} msgs ~${formatTokens(meta.keptTokensEst)} tok`,
-  ].join("\n");
-};
-
 /**
  * Format the summary with cache-friendly section ordering.
  *
@@ -92,7 +59,6 @@ const formatMetadataFooter = (meta: SummaryMetadata): string => {
  */
 export const formatSummary = (
   data: SectionData,
-  meta?: SummaryMetadata,
 ): string => {
   // Cache-friendly ordering: stable first, volatile last
   const stableSections = [
@@ -124,11 +90,6 @@ export const formatSummary = (
   if (parts.length === 0) return "";
 
   let result = wrapLongLines(parts.join("\n\n---\n\n"));
-
-  // Append metadata footer if provided
-  if (meta) {
-    result += "\n\n" + formatMetadataFooter(meta);
-  }
 
   // NOTE: RECALL_NOTE is intentionally NOT appended here.
   // It is appended once by `compile()` at the very end, after merge-with-previous,

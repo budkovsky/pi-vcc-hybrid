@@ -323,18 +323,6 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
       },
     };
 
-    // Attach metadata footer if we have the required info
-    if (preparation.tokensBefore && lastStats) {
-      compileInput.metadata = {
-        timestamp: new Date().toISOString(),
-        sourceMessageCount: agentMessages.length,
-        tokensBefore: preparation.tokensBefore,
-        keptCount: lastStats.kept,
-        keptTokensEst: lastStats.keptTokensEst,
-        messageRange,
-      };
-    }
-
     const summary = compile(compileInput);
 
     const branchIds = branchEntries.map((e: any) => e.id);
@@ -374,6 +362,10 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
       compressionRatio: preparation.tokensBefore > 0
         ? Math.round(preparation.tokensBefore / Math.max(1, agentMessages.length))
         : undefined,
+      timestamp: new Date().toISOString(),
+      tokensBefore: preparation.tokensBefore || undefined,
+      keptCount: lastStats?.kept || undefined,
+      keptTokensEst: lastStats?.keptTokensEst || undefined,
     };
 
     lastCompactWasPiVcc = isPiVcc;
