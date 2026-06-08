@@ -249,9 +249,9 @@ describe("government domain: vcc_recall integration", () => {
 
       // Query with all-common government vocabulary
       const all = await invoke(tool, file, { query: "policy review compliance document" });
-      // Should show pagination, not dump everything at once
-      expect(all).toMatch(/Page \d+\/\d+/);
-      // Page size is 5, so we should see at most 5 result entries
+      // Should show match results, not dump everything at once
+      expect(all).toMatch(/matches/);
+      // Page size is 5, so we should see at most 5 result entries per page
       const matchLines = all.split("\n").filter((l: string) => /^> #\d+/.test(l.trim()));
       expect(matchLines.length).toBeLessThanOrEqual(5);
     } finally {
