@@ -386,6 +386,12 @@ export const sectionsToTranscript = (sections: BriefLine[]): TranscriptEntry[] =
   return entries;
 };
 
+// ── convenience ──
+
+/** Build and stringify the brief transcript in one call. */
+export const compileBrief = (blocks: NormalizedBlock[]): string =>
+  stringifyBrief(buildBriefSections(blocks));
+
 // ── turn identification (HCA zone) ──
 
 const WRITE_TOOLS = new Set([

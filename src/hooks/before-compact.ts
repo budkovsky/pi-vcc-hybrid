@@ -6,7 +6,7 @@ import type { PiVccCompactionDetails } from "../details";
 
 export const PI_VCC_COMPACT_INSTRUCTION = "__pi_vcc__";
 
-interface CompactionStats {
+export interface CompactionStats {
   summarized: number;
   kept: number;
   keptTokensEst: number;
@@ -86,15 +86,15 @@ interface EntryWithMessage {
   message: { role: string; content: unknown };
 }
 
-type OwnCutCancelReason =
+export type OwnCutCancelReason =
   | "no_live_messages"
   | "too_few_live_messages";
 
-type OwnCutResult =
+export type OwnCutResult =
   | { ok: true; messages: any[]; firstKeptEntryId: string; compactAll: boolean }
   | { ok: false; reason: OwnCutCancelReason };
 
-function buildOwnCut(branchEntries: any[]): OwnCutResult {
+export function buildOwnCut(branchEntries: any[]): OwnCutResult {
   // Find the last compaction entry and its firstKeptEntryId
   let lastCompactionIdx = -1;
   let lastKeptId: string | undefined;

@@ -11,7 +11,7 @@ import type { PiVccCompactionDetails } from "../details";
 const DEFAULT_RECENT = 25;
 const PAGE_SIZE = 5;
 
-const invalidExpandIndices = (requested: number[], available: Set<number>): number[] =>
+export const invalidExpandIndices = (requested: number[], available: Set<number>): number[] =>
   requested.filter((i) => !Number.isInteger(i) || !available.has(i));
 
 /**
