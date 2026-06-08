@@ -169,7 +169,7 @@ export const registerRecallTool = (pi: ExtensionAPI) => {
         const totalPages = Math.ceil(allResults.length / PAGE_SIZE);
         // Cap pages: don't let the agent page through hundreds of results.
         // If totalPages is too large, suggest narrowing the query instead.
-        const MAX_PAGES = 10;
+        const MAX_PAGES = 5;
         if (allResults.length > 0 && page > Math.min(totalPages, MAX_PAGES)) {
           return {
             content: [{ type: "text", text: `Too many results to page through (${allResults.length} matches across ${totalPages} pages). Try a more specific query or use scope:'compaction:N' to narrow the range${searchScopeLabel}.` }],
