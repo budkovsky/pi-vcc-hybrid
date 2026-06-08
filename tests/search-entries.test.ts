@@ -88,12 +88,18 @@ describe("searchEntries", () => {
 
   // ── natural language queries (OR logic + ranking) ──
 
-  it("natural language query uses OR logic", () => {
-    // "root cause auth" -- matches entries containing ANY of these terms
+  it("natural language query uses OR logic with multi-term minimum", () => {
+    // "root cause auth" -- 3 meaningful terms → requires ≥2 matches
+    // #3 has all 3 (root, cause, auth); #1 has only auth (1 term, below threshold)
     const r = searchEntries(entries, messages, "root cause auth");
-    expect(r.length).toBeGreaterThanOrEqual(2); // #3 has all 3, #1 has auth
-    // Best match (highest BM25) should come first
+    expect(r.length).toBe(1);
     expect(r[0].index).toBe(3); // "Found the root cause in auth module" matches all 3
+  });
+
+  it("2-term OR query matches on single term (no multi-term floor)", () => {
+    // 2 meaningful terms → no floor, matches entries with ANY term
+    const r = searchEntries(entries, messages, "login auth");
+    expect(r.length).toBeGreaterThanOrEqual(2); // #0 has login, #1 + #3 have auth
   });
 
   it("natural language ranks by BM25 score", () => {
@@ -160,5 +166,68 @@ describe("searchEntries", () => {
     expect(r).toHaveLength(1);
     expect(r[0].index).toBe(1);
     expect(r[0].snippet).toContain("race condition");
+  });
+
+  // ── search result grounding (prevents "half the session" returns) ──
+
+  it("filters low-relevance BM25 hits by score ratio threshold", () => {
+    // Build a session where one entry is highly relevant and many are barely relevant
+    const govEntries: RenderedEntry[] = [
+      { index: 0, role: "user", summary: "Review the policy document" },
+      { index: 1, role: "assistant", summary: "I found the policy document. It covers the review process." },
+      { index: 2, role: "user", summary: "Check the deployment pipeline" },
+      { index: 3, role: "assistant", summary: "The pipeline has a step for document generation" }, // weak match
+      { index: 4, role: "user", summary: "Fix the login bug" },
+      { index: 5, role: "assistant", summary: "Updated the document in README" }, // very weak
+    ];
+    const govMsgs: Message[] = [
+      { role: "user", content: "Review the policy document" } as any,
+      { role: "assistant", content: [{ type: "text", text: "I found the policy document. It covers the review process." }] } as any,
+      { role: "user", content: "Check the deployment pipeline" } as any,
+      { role: "assistant", content: [{ type: "text", text: "The pipeline has a step for document generation" }] } as any,
+      { role: "user", content: "Fix the login bug" } as any,
+      { role: "assistant", content: [{ type: "text", text: "Updated the document in README" }] } as any,
+    ];
+    // 2-term query: policy + review → no multi-term floor
+    // Should return both strong matches but may filter very weak ones
+    const r = searchEntries(govEntries, govMsgs, "policy review");
+    // #0 and #1 are strong matches; #3 and #5 only have "document" which isn't queried
+    expect(r.length).toBeLessThanOrEqual(2);
+    expect(r[0].index).toBe(0); // highest BM25: matches both terms
+  });
+
+  it("requires 2+ term matches for 3+ term queries", () => {
+    // Simulates a government session with common domain vocabulary
+    const govEntries: RenderedEntry[] = [
+      { index: 0, role: "user", summary: "Review the policy document" },
+      { index: 1, role: "assistant", summary: "Checking policy" }, // only 1/3 terms
+      { index: 2, role: "user", summary: "Fix login bug" }, // 0/3 terms
+      { index: 3, role: "assistant", summary: "Review policy and update document" }, // 2/3 terms
+    ];
+    const govMsgs: Message[] = [
+      { role: "user", content: "Review the policy document" } as any,
+      { role: "assistant", content: [{ type: "text", text: "Checking policy" }] } as any,
+      { role: "user", content: "Fix login bug" } as any,
+      { role: "assistant", content: [{ type: "text", text: "Review policy and update document" }] } as any,
+    ];
+    // "review policy document" = 3 terms → requires ≥2 matches
+    // #0 matches all 3, #1 matches only "policy" (1 term → filtered), #3 matches "review" + "document" (2 terms → kept)
+    const r = searchEntries(govEntries, govMsgs, "review policy document");
+    expect(r.length).toBe(2);
+    const indices = r.map((h) => h.index).sort();
+    expect(indices).toContain(0);
+    expect(indices).toContain(3);
+  });
+
+  it("hard caps regex search results", () => {
+    // Build many entries that all match the same regex
+    const manyEntries: RenderedEntry[] = Array.from({ length: 100 }, (_, i) => ({
+      index: i, role: "user" as const, summary: `document ${i} review`,
+    }));
+    const manyMsgs: Message[] = Array.from({ length: 100 }, (_, i) => ({
+      role: "user" as const, content: `document ${i} review`,
+    } as any));
+    const r = searchEntries(manyEntries, manyMsgs, "document.*review");
+    expect(r.length).toBeLessThanOrEqual(50); // MAX_SEARCH_RESULTS
   });
 });

@@ -74,6 +74,21 @@ const countMatches = (hay: string, terms: string[]): number => {
 const BM25_K = 1.2;
 const BM25_B = 0.75;
 
+// ── Search result caps ──
+
+/** Hard cap on total search results to prevent "half the session" returns. */
+const MAX_SEARCH_RESULTS = 50;
+
+/** Minimum BM25 score as a fraction of the top-scoring result.
+ *  Entries scoring below this ratio of the best hit are excluded
+ *  as low-relevance noise. */
+const MIN_SCORE_RATIO = 0.1;
+
+/** For multi-term queries (3+ meaningful terms), require at least this
+ *  many terms to match. This prevents common domain vocabulary from
+ *  matching almost every entry via OR semantics. */
+const MIN_TERM_MATCH_FOR_MULTITERM = 2;
+
 /** Count occurrences of a regex pattern in text. */
 const termFreq = (text: string, pattern: RegExp): number => {
   const matches = text.match(new RegExp(pattern.source, "gi"));
@@ -182,6 +197,7 @@ export const searchEntries = (
       if (regex.test(hay)) {
         const snip = lineSnippet(text, regex);
         hits.push({ ...e, snippet: snip, matchCount: 1 });
+        if (hits.length >= MAX_SEARCH_RESULTS) break;
       }
     }
     return hits;
@@ -204,12 +220,18 @@ export const searchEntries = (
 
   const ctx = buildBM25Context(docs, terms);
 
+  // For multi-term queries, require a minimum number of terms to match.
+  // This prevents common domain vocabulary (e.g. "document", "policy",
+  // "review" in government/corporate sessions) from matching nearly
+  // every entry via pure OR semantics.
+  const minMatchCount = terms.length >= 3 ? MIN_TERM_MATCH_FOR_MULTITERM : 1;
+
   const scored: Array<{ hit: SearchHit; score: number }> = [];
   for (let i = 0; i < entries.length; i++) {
     const e = entries[i];
     const hay = docs[i];
     const mc = countMatches(hay, terms);
-    if (mc === 0) continue;
+    if (mc < minMatchCount) continue;
     const score = bm25Score(hay, terms, ctx);
     const text = messages[i] ? fullText(messages[i]) : e.summary;
     const snip = lineSnippet(text, snipRe);
@@ -221,5 +243,22 @@ export const searchEntries = (
 
   // Sort by BM25 score desc
   scored.sort((a, b) => b.score - a.score);
+
+  // Apply score ratio threshold: drop entries scoring below a fraction
+  // of the top result. These are low-relevance noise matches.
+  if (scored.length > 1) {
+    const topScore = scored[0].score;
+    if (topScore > 0) {
+      const threshold = topScore * MIN_SCORE_RATIO;
+      const cutIdx = scored.findIndex((s) => s.score < threshold);
+      if (cutIdx > 0) scored.length = cutIdx;
+    }
+  }
+
+  // Hard cap on total results
+  if (scored.length > MAX_SEARCH_RESULTS) {
+    scored.length = MAX_SEARCH_RESULTS;
+  }
+
   return scored.map((s) => s.hit);
 };

@@ -164,16 +164,28 @@ export const registerRecallTool = (pi: ExtensionAPI) => {
         : msgs.slice(-DEFAULT_RECENT);
 
       if (params.query?.trim()) {
+        const searchScopeLabel = scopeLabel || (rawScope === "all" ? " (scope: all)" : "");
         const page = Math.max(1, params.page ?? 1);
+        const totalPages = Math.ceil(allResults.length / PAGE_SIZE);
+        // Cap pages: don't let the agent page through hundreds of results.
+        // If totalPages is too large, suggest narrowing the query instead.
+        const MAX_PAGES = 10;
+        if (allResults.length > 0 && page > Math.min(totalPages, MAX_PAGES)) {
+          return {
+            content: [{ type: "text", text: `Too many results to page through (${allResults.length} matches across ${totalPages} pages). Try a more specific query or use scope:'compaction:N' to narrow the range${searchScopeLabel}.` }],
+            details: undefined,
+          };
+        }
         const start = (page - 1) * PAGE_SIZE;
         const pageResults = allResults.slice(start, start + PAGE_SIZE);
-        const totalPages = Math.ceil(allResults.length / PAGE_SIZE);
         const header = totalPages > 1
-          ? `Page ${page}/${totalPages} (${allResults.length} total matches${scopeLabel})`
-          : `${allResults.length} matches${scopeLabel}`;
-        const footer = page < totalPages
-          ? `\n--- Use page:${page + 1}${scopeLabel ? "" : rawScope === "all" ? " with scope:'all'" : ""} for more results ---`
-          : "";
+          ? `Page ${page}/${totalPages} (${allResults.length} total matches${searchScopeLabel})`
+          : `${allResults.length} matches${searchScopeLabel}`;
+        const footer = page < totalPages && page < MAX_PAGES
+          ? `\n--- Use page:${page + 1} for more results ---`
+          : totalPages > MAX_PAGES
+            ? `\n--- Results truncated at ${MAX_PAGES} pages. Use a more specific query or scope to narrow results. ---`
+            : "";
         const output = formatRecallOutput(pageResults, params.query, header) + footer;
         return {
           content: [{ type: "text", text: output }],
