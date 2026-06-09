@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } fr
 import { existsSync, unlinkSync, writeFileSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { registerProactiveThresholdHook, resetProactiveCooldown } from "../src/hooks/proactive-threshold";
+import { registerProactiveThresholdHook, resetProactiveState } from "../src/hooks/proactive-threshold";
 
 let tmpDir: string;
 let CONFIG_PATH: string;
@@ -69,7 +69,7 @@ function setConfig(cfg: Record<string, unknown>) {
 
 describe("proactiveThreshold: agent_end", () => {
   afterEach(() => {
-    resetProactiveCooldown();
+    resetProactiveState();
     if (existsSync(CONFIG_PATH)) unlinkSync(CONFIG_PATH);
   });
 
@@ -158,7 +158,7 @@ describe("proactiveThreshold: agent_end", () => {
 
 describe("proactiveThreshold: model_select", () => {
   afterEach(() => {
-    resetProactiveCooldown();
+    resetProactiveState();
     if (existsSync(CONFIG_PATH)) unlinkSync(CONFIG_PATH);
   });
 
@@ -215,7 +215,7 @@ describe("proactiveThreshold: model_select", () => {
 
 describe("proactiveThreshold: cooldown", () => {
   afterEach(() => {
-    resetProactiveCooldown();
+    resetProactiveState();
     if (existsSync(CONFIG_PATH)) unlinkSync(CONFIG_PATH);
   });
 
@@ -277,7 +277,7 @@ describe("proactiveThreshold: cooldown", () => {
 
 describe("proactiveThreshold: modelId matching", () => {
   afterEach(() => {
-    resetProactiveCooldown();
+    resetProactiveState();
     if (existsSync(CONFIG_PATH)) unlinkSync(CONFIG_PATH);
   });
 
@@ -335,7 +335,7 @@ describe("proactiveThreshold: modelId matching", () => {
 
 describe("proactiveThreshold: exact boundary", () => {
   afterEach(() => {
-    resetProactiveCooldown();
+    resetProactiveState();
     if (existsSync(CONFIG_PATH)) unlinkSync(CONFIG_PATH);
   });
 
@@ -378,7 +378,7 @@ describe("proactiveThreshold: exact boundary", () => {
 
 describe("proactiveThreshold: without model", () => {
   afterEach(() => {
-    resetProactiveCooldown();
+    resetProactiveState();
     if (existsSync(CONFIG_PATH)) unlinkSync(CONFIG_PATH);
   });
 
@@ -399,7 +399,7 @@ describe("proactiveThreshold: without model", () => {
 
 describe("proactiveThreshold: works for pi-core compaction too", () => {
   afterEach(() => {
-    resetProactiveCooldown();
+    resetProactiveState();
     if (existsSync(CONFIG_PATH)) unlinkSync(CONFIG_PATH);
   });
 

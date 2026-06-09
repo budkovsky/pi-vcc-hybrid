@@ -7,15 +7,29 @@ const formatTokens = (n: number): string => {
 };
 
 // Cooldown after compaction to prevent double-trigger.
-// Set when compaction runs, cleared after 3 seconds.
+// Set immediately when we call ctx.compact() AND on session_compact,
+// cleared after 3 seconds.
 let lastCompactTime = 0;
 const COOLDOWN_MS = 3000;
+
+// Flag: when true, session_before_compact should NOT cancel even if
+// tokensBefore is below the per-model threshold. This is set when
+// our proactive trigger calls ctx.compact() and cleared when
+// session_compact fires. It prevents the threshold guard from
+// cancelling a compaction that we ourselves initiated.
+let proactiveTriggerActive = false;
 
 const setCooldown = () => { lastCompactTime = Date.now(); };
 const isCoolingDown = () => Date.now() - lastCompactTime < COOLDOWN_MS;
 
-/** Reset cooldown state (for testing). */
-export const resetProactiveCooldown = () => { lastCompactTime = 0; };
+/** Check if a proactive trigger is currently in flight. */
+export const isProactiveTriggerActive = () => proactiveTriggerActive;
+
+/** Reset all proactive state (for testing / session start). */
+export const resetProactiveState = () => {
+  lastCompactTime = 0;
+  proactiveTriggerActive = false;
+};
 
 /**
  * Check if per-model threshold has been crossed and trigger compaction
@@ -39,13 +53,9 @@ const checkAndTrigger = (ctx: { model?: any; getContextUsage?: () => any; compac
   const effectiveThreshold = contextWindow - threshold.reserveTokens;
 
   // Only trigger if context EXCEEDS the per-model threshold.
-  // If context is below the threshold, there's no need to compact.
   if (usage.tokens <= effectiveThreshold) return;
 
   // Cooldown guard — prevent double-trigger within 3s of last compaction.
-  // This handles the case where pi-core also triggers compaction on the
-  // same turn (global threshold crossed too) or where our model_select
-  // and turn_end handlers both fire for the same switch.
   if (isCoolingDown()) return;
 
   try {
@@ -55,14 +65,24 @@ const checkAndTrigger = (ctx: { model?: any; getContextUsage?: () => any; compac
       "info",
     );
   } catch {}
-  ctx.compact?.();
+
+  // Set cooldown IMMEDIATELY (before ctx.compact() runs) to prevent
+  // pi-core's own _checkCompaction from also triggering compaction
+  // on the same turn. If both the per-model and global thresholds
+  // are crossed, both would fire — the cooldown ensures only one wins.
   setCooldown();
+
+  // Mark that this compaction was triggered by us, so session_before_compact
+  // doesn't cancel it if tokensBefore differs from getContextUsage().
+  proactiveTriggerActive = true;
+
+  ctx.compact?.();
 };
 
 /**
  * Registers proactive per-model compaction thresholds.
  *
- * Two triggers:
+ * Three triggers:
  *
  * 1. `agent_end` — after each agent run completes, check if context
  *    exceeds the current model's per-model threshold. If the per-model
@@ -70,17 +90,21 @@ const checkAndTrigger = (ctx: { model?: any; getContextUsage?: () => any; compac
  *    model wants to compact *earlier*), pi-core won't trigger compaction
  *    at this point. We step in and trigger it proactively.
  *
- *    If the global threshold is already crossed, pi-core will trigger
- *    compaction itself, and our session_before_compact handler will
- *    either cancel (model can handle more) or proceed (threshold
- *    actually crossed).
- *
  * 2. `model_select` — when switching to a model with a lower effective
  *    threshold, the current context may already exceed the new model's
  *    capacity. Trigger compaction immediately.
  *
- * 3. `session_compact` — cooldown tracking. After any compaction
- *    completes, we set a cooldown to prevent double-triggering.
+ * 3. `session_compact` — cooldown tracking + clear proactiveTriggerActive.
+ *    After any compaction completes, we set a cooldown to prevent
+ *    double-triggering and clear the self-initiated flag.
+ *
+ * `session_before_compact` reads `isProactiveTriggerActive()` to decide
+ * whether to cancel. When our proactive trigger fires, ctx.compact() is
+ * queued but hasn't run yet. By the time session_before_compact actually
+ * fires, tokensBefore may differ from the getContextUsage() snapshot
+ * that triggered the compact. Without the flag, the threshold guard would
+ * cancel the compaction we ourselves requested — producing confusing
+ * "Compacting..." then "Skipped compaction" notifications.
  */
 export const registerProactiveThresholdHook = (pi: ExtensionAPI) => {
   // Proactive compaction after each agent run
@@ -93,13 +117,15 @@ export const registerProactiveThresholdHook = (pi: ExtensionAPI) => {
     checkAndTrigger(ctx, "model-switch");
   });
 
-  // Track compaction completion for cooldown
+  // Track compaction completion: set cooldown and clear self-initiated flag
   pi.on("session_compact", () => {
     setCooldown();
+    proactiveTriggerActive = false;
   });
 
-  // Reset cooldown on session start so state doesn't leak between sessions
+  // Reset state on session start so state doesn't leak between sessions
   pi.on("session_start", () => {
     lastCompactTime = 0;
+    proactiveTriggerActive = false;
   });
 };

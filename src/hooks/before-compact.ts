@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { writeFileSync } from "fs";
 import { compile, type CompileInput } from "../core/summarize";
 import { loadSettings, getModelThreshold, type PiVccSettings } from "../core/settings";
+import { isProactiveTriggerActive } from "./proactive-threshold";
 import { triggerInvisibleContinue } from "../core/invisible-continue";
 import type { PiVccCompactionDetails } from "../details";
 
@@ -219,15 +220,13 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
     // This is NOT applied to explicit /pi-vcc commands — if the user asked
     // for a compaction, honor it.
     const isPiVcc = customInstructions === PI_VCC_COMPACT_INSTRUCTION;
-    if (!isPiVcc) {
+    if (!isPiVcc && !isProactiveTriggerActive()) {
       const threshold = getModelThreshold(settings, ctx.model);
       if (threshold) {
         const contextWindow = ctx.model?.contextWindow ?? 0;
         if (contextWindow > 0) {
           const effectiveThreshold = contextWindow - threshold.reserveTokens;
           if (preparation.tokensBefore <= effectiveThreshold) {
-            // Context hasn't crossed this model's threshold — don't compact yet.
-            // The model can handle more context than the global setting assumes.
             try {
               const pct = Math.round((preparation.tokensBefore / contextWindow) * 100);
               ctx?.ui?.notify?.(
