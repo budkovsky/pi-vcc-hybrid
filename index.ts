@@ -4,6 +4,7 @@ import { registerBeforeCompactHook } from "./src/hooks/before-compact";
 import { registerPiVccCommand } from "./src/commands/pi-vcc";
 import { registerVccRecallCommand } from "./src/commands/vcc-recall";
 import { registerRecallTool } from "./src/tools/recall";
+import { resetInvisibleContinue } from "./src/core/invisible-continue";
 
 export default (pi: ExtensionAPI) => {
   scaffoldSettings();
@@ -11,4 +12,8 @@ export default (pi: ExtensionAPI) => {
   registerPiVccCommand(pi);
   registerVccRecallCommand(pi);
   registerRecallTool(pi);
+
+  pi.on("session_start", () => {
+    resetInvisibleContinue();
+  });
 };

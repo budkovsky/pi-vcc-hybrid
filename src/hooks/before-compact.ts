@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { writeFileSync } from "fs";
 import { compile, type CompileInput } from "../core/summarize";
 import { loadSettings, type PiVccSettings } from "../core/settings";
+import { triggerInvisibleContinue } from "../core/invisible-continue";
 import type { PiVccCompactionDetails } from "../details";
 
 export const PI_VCC_COMPACT_INSTRUCTION = "__pi_vcc__";
@@ -14,6 +15,7 @@ export interface CompactionStats {
 
 let lastStats: CompactionStats | null = null;
 let lastCompactWasPiVcc = false;
+let lastCompactHandledByVcc = false;
 export const getLastCompactionStats = () => lastStats;
 
 const formatTokens = (n: number): string => {
@@ -369,6 +371,7 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
     };
 
     lastCompactWasPiVcc = isPiVcc;
+    lastCompactHandledByVcc = true;
 
     // Signal to neuralwatt-mcr that pi-vcc is handling compaction
     // so it doesn't cancel the event. Without this flag, neuralwatt-mcr
@@ -386,20 +389,75 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
     };
   });
 
-  // Fire success toast for /compact path only (delayed to let UI settle).
-  // /pi-vcc path uses its own onComplete callback in the command handler.
+  // After compaction completes, check if the agent loop stalled and needs
+  // an invisible continue to resume.  This handles threshold compaction
+  // where willRetry=false — pi-core doesn't auto-retry, and the agent loop
+  // exits because hasQueuedMessages() returns false.  If the last message in
+  // the rebuilt context is an assistant mid-task (tool_use, length, or error
+  // that isn't a clean end_turn), the agent was interrupted and should
+  // continue.
   pi.on("session_compact", (event, ctx) => {
-    if (!event.fromExtension) return;
-    if (lastCompactWasPiVcc) return; // /pi-vcc handles its own toast via onComplete
-    const stats = lastStats;
-    if (!stats) return;
-    setTimeout(() => {
-      try {
-        ctx?.ui?.notify?.(
-          `pi-vcc: ${stats.summarized} source entries processed; tail kept ${stats.kept} (~${formatTokens(stats.keptTokensEst)} tok).`,
-          "info",
-        );
-      } catch {}
-    }, 500);
+    // Only act when pi-vcc drove the compaction
+    if (!lastCompactHandledByVcc) return;
+    lastCompactHandledByVcc = false;
+
+    // Fire success toast for /compact path only (delayed to let UI settle).
+    // /pi-vcc path uses its own onComplete callback in the command handler.
+    if (!lastCompactWasPiVcc) {
+      const stats = lastStats;
+      if (stats) {
+        setTimeout(() => {
+          try {
+            ctx?.ui?.notify?.(
+              `pi-vcc: ${stats.summarized} source entries processed; tail kept ${stats.kept} (~${formatTokens(stats.keptTokensEst)} tok).`,
+              "info",
+            );
+          } catch {}
+        }, 500);
+      }
+    }
+
+    // Determine if the agent needs to continue after compaction.
+    // After rebuildSessionContext, the agent's state.messages are updated.
+    // Check the last message: if it's an assistant message that isn't a
+    // clean end_turn, the agent was mid-task and needs to resume.
+    //
+    // We do NOT continue when:
+    // - Last message is user/toolResult (agent can continue naturally)
+    // - Last message is assistant with stopReason=end_turn (task finished)
+    // - The compaction entry's firstKeptEntryId is non-empty and the tail
+    //   includes a user message (the next user prompt will drive the loop)
+    //
+    // We DO continue when:
+    // - Last message is assistant with stopReason=tool_use (mid-tool cycle)
+    // - Last message is assistant with stopReason=length (hit max tokens)
+    // - last message is assistant with stopReason=error (API error, but
+    //   pi-retry may handle these — only continue for non-retryable stalls)
+    // - Compact-all (firstKeptEntryId="") — context is just the summary,
+    //   the agent needs to re-enter the loop to continue the task
+    try {
+      const entries = ctx.sessionManager.getEntries();
+      // Walk backwards to find the last message entry
+      let lastMsg: { role: string; stopReason?: string; content?: unknown } | undefined;
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const e = (entries as any[])[i];
+        if (e.type === "message" && e.message) {
+          lastMsg = e.message;
+          break;
+        }
+      }
+      if (!lastMsg || lastMsg.role !== "assistant") return;
+
+      // Agent completed its turn cleanly — no continuation needed
+      if (lastMsg.stopReason === "end_turn") return;
+
+      // Agent was mid-task (tool_use, length, or error) — needs to continue.
+      // For errors, pi-retry may handle the retry itself, but it doesn't
+      // know about compaction. The invisible continue ensures the agent
+      // loop restarts; pi-retry will see the error and retry if appropriate.
+      triggerInvisibleContinue();
+    } catch {
+      // Non-critical — if context inspection fails, don't block compaction
+    }
   });
 };
