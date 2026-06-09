@@ -420,19 +420,18 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
     // Determine if the agent needs to continue after compaction.
     // After rebuildSessionContext, the agent's state.messages are updated.
     // Check the last message: if it's an assistant message that isn't a
-    // clean end_turn, the agent was mid-task and needs to resume.
+    // clean stop, the agent was mid-task and needs to resume.
     //
     // We do NOT continue when:
     // - Last message is user/toolResult (agent can continue naturally)
     // - Last message is assistant with stopReason=stop (task finished)
-    // - The compaction entry's firstKeptEntryId is non-empty and the tail
-    //   includes a user message (the next user prompt will drive the loop)
+    // - Last message is assistant with stopReason=aborted (user cancelled)
+    // - Last message is assistant with stopReason=error (pi-retry handles
+    //   retry via its agent_end handler — avoid duplicate triggerInvisibleContinue)
     //
     // We DO continue when:
     // - Last message is assistant with stopReason=toolUse (mid-tool cycle)
     // - Last message is assistant with stopReason=length (hit max tokens)
-    // - last message is assistant with stopReason=error (API error, but
-    //   pi-retry may handle these — only continue for non-retryable stalls)
     // - Compact-all (firstKeptEntryId="") — context is just the summary,
     //   the agent needs to re-enter the loop to continue the task
     try {
@@ -454,10 +453,13 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
       // Agent was aborted by user — don't auto-continue
       if (lastMsg.stopReason === "aborted") return;
 
-      // Agent was mid-task (tool_use, length, or error) — needs to continue.
-      // For errors, pi-retry may handle the retry itself, but it doesn't
-      // know about compaction. The invisible continue ensures the agent
-      // loop restarts; pi-retry will see the error and retry if appropriate.
+      // Agent hit an error — pi-retry handles this via its agent_end handler.
+      // If we also fire triggerInvisibleContinue, both extensions race
+      // to call prompt([]), causing "Agent is already processing" (wasteful)
+      // or a duplicate continuation. Let pi-retry own error retries.
+      if (lastMsg.stopReason === "error") return;
+
+      // Agent was mid-task (toolUse or length) — needs to continue.
       triggerInvisibleContinue();
     } catch {
       // Non-critical — if context inspection fails, don't block compaction

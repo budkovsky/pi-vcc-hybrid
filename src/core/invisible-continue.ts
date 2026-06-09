@@ -25,9 +25,21 @@ Agent.prototype.subscribe = function (this: Agent, ...args: unknown[]) {
   return _prevSubscribe.apply(this, args);
 };
 
-// Monkey-patch continue() so the session's built-in loop cooperates with
-// our mutex. Without this, the session's continue() could race our
-// prompt([]) call and throw "Agent is already processing".
+// Monkey-patch continue() so that after compaction, when the rebuilt
+// context ends with an assistant message, the agent loop can still
+// continue. Without this patch, the session's continue() call throws
+// "Cannot continue from message role: assistant" and the agent loop
+// exits — leaving mid-task work unfinished.
+//
+// The fix: when continue() would throw because the last message is an
+// assistant, fall back to prompt([]) instead. prompt([]) doesn't check
+// the last message role — it starts a fresh agent loop with the current
+// context. This is equivalent to the invisible-continue mechanism
+// (same call the extension fires from session_compact), but triggered
+// from the session's own continue() path so the while loop stays alive.
+//
+// Chains the previous patch (pi-retry, pi-invisible-continue) so all
+// mutexes are respected.
 const _prevContinue = Agent.prototype.continue as (this: Agent) => Promise<unknown>;
 Agent.prototype.continue = function (this: Agent) {
   const self = this;
@@ -39,15 +51,53 @@ Agent.prototype.continue = function (this: Agent) {
       return await _prevContinue.call(self);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      // After our invisible continue finishes, the transcript ends with a
-      // fresh assistant message.  The session's continue() sees this and
-      // would throw.  Catch and swallow — the while-loop will poll
-      // _handlePostAgentRun() again, find no error, and exit cleanly.
-      if (
-        msg.includes("Cannot continue from message role") ||
-        msg.includes("Cannot continue from an assistant message") ||
-        msg.includes("Agent is already processing")
-      ) {
+
+      // After compaction, the rebuilt context often ends with an assistant
+      // message. The original continue() throws "Cannot continue from
+      // message role: assistant". Instead of swallowing the error and
+      // letting the agent loop die (which leaves mid-task work unfinished),
+      // fall back to prompt([]). This restarts the agent loop with the
+      // compacted context — the LLM picks up where it left off.
+      //
+      // prompt([]) is safe regardless of last message role. The agent
+      // processes the current context and continues.
+      //
+      // We only do this when the agent is NOT currently processing
+      // (no other triggerInvisibleContinue in flight) to avoid races.
+      if (msg.includes("Cannot continue from message role") ||
+          msg.includes("Cannot continue from an assistant message")) {
+        // Check stopReason of the last message — only continue if
+        // the agent was mid-task (not a clean stop or user abort).
+        const lastMsg = self.state.messages[self.state.messages.length - 1];
+        if (lastMsg?.role === "assistant" &&
+            lastMsg.stopReason !== "stop" &&
+            lastMsg.stopReason !== "aborted") {
+          // Agent was mid-task — fall through to prompt([])
+          // (after the error-handling block)
+        } else {
+          // Agent finished cleanly or was aborted — don't continue.
+          // The session loop should exit (task complete).
+          return;
+        }
+        // Fall back to prompt([]) to actually continue the agent.
+        // The while loop in _runAgentPrompt stays alive because prompt([])
+        // runs the agent (which emits events, updates _lastAssistantMessage,
+        // etc.).
+        if (!_continueInProgress) {
+          _continueInProgress = true;
+          try {
+            await self.prompt([]);
+          } catch {
+            // Agent already processing or other transient error
+          } finally {
+            _continueInProgress = false;
+          }
+        }
+        return;
+      }
+
+      if (msg.includes("Agent is already processing")) {
+        // Another extension is driving the agent — wait it out.
         return;
       }
       throw e;
