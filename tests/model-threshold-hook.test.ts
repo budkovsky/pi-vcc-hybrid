@@ -126,6 +126,106 @@ describe("session_before_compact: per-model threshold", () => {
     expect(result.compaction).toBeDefined();
   });
 
+  test("cancels when context is below globalThreshold with compactPercent", () => {
+    // compactPercent: 65 → reserve = 128000 * 0.35 = 44800 → threshold = 83200
+    setConfig({
+      debug: false,
+      overrideDefaultCompaction: true,
+      globalThreshold: { compactPercent: 65 },
+    });
+    const { pi, invoke } = createMockPi({
+      id: "some-model",
+      provider: "some-provider",
+      contextWindow: 128000,
+    });
+    registerBeforeCompactHook(pi);
+
+    // 50k tokens < 83200 → below threshold
+    const entries = [
+      msg("m1", "user", "hello"),
+      msg("m2", "assistant", "hi"),
+      msg("m3", "user", "do work"),
+      msg("m4", "assistant", "done"),
+    ];
+    const result = invoke(makeEvent(entries, undefined, 50000));
+    expect(result).toEqual({ cancel: true });
+  });
+
+  test("allows compaction when context exceeds globalThreshold with compactPercent", () => {
+    // compactPercent: 65 → reserve = 128000 * 0.35 = 44800 → threshold = 83200
+    setConfig({
+      debug: false,
+      overrideDefaultCompaction: true,
+      globalThreshold: { compactPercent: 65 },
+    });
+    const { pi, invoke } = createMockPi({
+      id: "some-model",
+      provider: "some-provider",
+      contextWindow: 128000,
+    });
+    registerBeforeCompactHook(pi);
+
+    // 100k tokens > 83200 → above threshold
+    const entries = [
+      msg("m1", "user", "hello"),
+      msg("m2", "assistant", "hi"),
+      msg("m3", "user", "do work"),
+      msg("m4", "assistant", "done"),
+    ];
+    const result = invoke(makeEvent(entries, undefined, 100000));
+    expect(result.cancel).toBeUndefined();
+    expect(result.compaction).toBeDefined();
+  });
+
+  test("cancels when context is below modelThreshold with compactPercent", () => {
+    // compactPercent: 80 → reserve = 200000 * 0.20 = 40000 → threshold = 160000
+    setConfig({
+      debug: false,
+      overrideDefaultCompaction: true,
+      modelThresholds: {
+        "neuralwatt/GLM-5.1": { compactPercent: 80 },
+      },
+    });
+    const { pi, invoke } = createMockPi({
+      id: "GLM-5.1",
+      provider: "neuralwatt",
+      contextWindow: 200000,
+    });
+    registerBeforeCompactHook(pi);
+
+    // 100k tokens < 160000 → below threshold
+    const entries = [
+      msg("m1", "user", "hello"),
+      msg("m2", "assistant", "hi"),
+      msg("m3", "user", "do work"),
+      msg("m4", "assistant", "done"),
+    ];
+    const result = invoke(makeEvent(entries, undefined, 100000));
+    expect(result).toEqual({ cancel: true });
+  });
+
+  test("globalThreshold with compactPercent falls back from defaultThreshold", () => {
+    setConfig({
+      debug: false,
+      overrideDefaultCompaction: true,
+      defaultThreshold: { reserveTokens: 16384 },
+    });
+    const { pi, invoke } = createMockPi({
+      id: "some-model",
+      provider: "some-provider",
+      contextWindow: 128000,
+    });
+    registerBeforeCompactHook(pi);
+
+    // 50k tokens < 128k - 16384 = 111616 → below threshold
+    const entries = [
+      msg("m1", "user", "hello"),
+      msg("m2", "assistant", "hi"),
+    ];
+    const result = invoke(makeEvent(entries, undefined, 50000));
+    expect(result).toEqual({ cancel: true });
+  });
+
   test("cancels when context is below defaultThreshold", () => {
     setConfig({
       debug: false,

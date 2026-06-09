@@ -197,7 +197,74 @@ describe("proactiveThreshold: model_select", () => {
     expect(mock.captured).toHaveLength(0);
   });
 
-  test("uses defaultThreshold when model does not match modelThresholds", () => {
+  test("uses globalThreshold when model does not match modelThresholds", () => {
+    setConfig({
+      debug: false,
+      overrideDefaultCompaction: true,
+      globalThreshold: { reserveTokens: 16384 },
+    });
+    const mock = createMockPi(
+      { id: "unknown-model", provider: "other", contextWindow: 128000 },
+      { tokens: 120000, contextWindow: 128000, percent: 94 },
+    );
+    registerProactiveThresholdHook(mock.piApi);
+    mock.emit("model_select", { type: "model_select" });
+    expect(mock.captured).toHaveLength(1);
+  });
+
+  test("uses globalThreshold with compactPercent", () => {
+    // compactPercent: 65 → reserve = 128000 * 0.35 = 44800 → threshold = 83200
+    setConfig({
+      debug: false,
+      overrideDefaultCompaction: true,
+      globalThreshold: { compactPercent: 65 },
+    });
+    const mock = createMockPi(
+      { id: "unknown-model", provider: "other", contextWindow: 128000 },
+      { tokens: 90000, contextWindow: 128000, percent: 70 },
+    );
+    registerProactiveThresholdHook(mock.piApi);
+    mock.emit("model_select", { type: "model_select" });
+    expect(mock.captured).toHaveLength(1);
+  });
+
+  test("uses compactPercent in modelThresholds", () => {
+    // compactPercent: 65 → reserve = 128000 * 0.35 = 44800 → threshold = 83200
+    setConfig({
+      debug: false,
+      overrideDefaultCompaction: true,
+      modelThresholds: {
+        "neuralwatt/GLM-5.1": { compactPercent: 65 },
+      },
+    });
+    const mock = createMockPi(
+      { id: "GLM-5.1", provider: "neuralwatt", contextWindow: 128000 },
+      { tokens: 90000, contextWindow: 128000, percent: 70 },
+    );
+    registerProactiveThresholdHook(mock.piApi);
+    mock.emit("agent_end", { type: "agent_end", messages: [] });
+    expect(mock.captured).toHaveLength(1);
+  });
+
+  test("does not trigger when context is below compactPercent threshold", () => {
+    // compactPercent: 65 → threshold = 83200
+    setConfig({
+      debug: false,
+      overrideDefaultCompaction: true,
+      modelThresholds: {
+        "neuralwatt/GLM-5.1": { compactPercent: 65 },
+      },
+    });
+    const mock = createMockPi(
+      { id: "GLM-5.1", provider: "neuralwatt", contextWindow: 128000 },
+      { tokens: 70000, contextWindow: 128000, percent: 55 },
+    );
+    registerProactiveThresholdHook(mock.piApi);
+    mock.emit("agent_end", { type: "agent_end", messages: [] });
+    expect(mock.captured).toHaveLength(0);
+  });
+
+  test("falls back to defaultThreshold when globalThreshold is not set", () => {
     setConfig({
       debug: false,
       overrideDefaultCompaction: true,

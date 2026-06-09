@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { loadSettings, getModelThreshold } from "../core/settings";
+import { loadSettings, getModelThreshold, resolveReserveTokens } from "../core/settings";
 
 const formatTokens = (n: number): string => {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
@@ -40,19 +40,20 @@ const checkAndTrigger = (ctx: { model?: any; getContextUsage?: () => any; compac
   const settings = loadSettings();
   const threshold = getModelThreshold(settings, ctx.model);
 
-  // No per-model threshold → nothing to do (pi-core's global threshold owns it)
+  // No threshold → nothing to do (pi-core's global threshold owns it)
   if (!threshold) return;
 
   const contextWindow = ctx.model?.contextWindow ?? 0;
-  if (contextWindow <= 0) return;
+  const reserve = resolveReserveTokens(threshold, contextWindow);
+  if (reserve == null || contextWindow <= 0) return;
 
   const usage = ctx.getContextUsage?.();
   if (!usage || usage.tokens === null) return;
 
-  // This model's compaction threshold
-  const effectiveThreshold = contextWindow - threshold.reserveTokens;
+  // This threshold's compaction trigger point
+  const effectiveThreshold = contextWindow - reserve;
 
-  // Only trigger if context EXCEEDS the per-model threshold.
+  // Only trigger if context EXCEEDS the threshold.
   if (usage.tokens <= effectiveThreshold) return;
 
   // Cooldown guard — prevent double-trigger within 3s of last compaction.
@@ -61,15 +62,14 @@ const checkAndTrigger = (ctx: { model?: any; getContextUsage?: () => any; compac
   try {
     const pct = Math.round((usage.tokens / contextWindow) * 100);
     ctx?.ui?.notify?.(
-      `pi-vcc: [${source}] Context at ${pct}% exceeds model threshold (${formatTokens(effectiveThreshold)} tok). Compacting...`,
+      `pi-vcc: [${source}] Context at ${pct}% exceeds threshold (${formatTokens(effectiveThreshold)} tok). Compacting...`,
       "info",
     );
   } catch {}
 
   // Set cooldown IMMEDIATELY (before ctx.compact() runs) to prevent
   // pi-core's own _checkCompaction from also triggering compaction
-  // on the same turn. If both the per-model and global thresholds
-  // are crossed, both would fire — the cooldown ensures only one wins.
+  // on the same turn.
   setCooldown();
 
   // Mark that this compaction was triggered by us, so session_before_compact

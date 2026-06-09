@@ -210,7 +210,7 @@ pi-vcc is one of four compaction approaches in the AI coding-agent ecosystem. He
 - **Error resolution detection** — tsc errors in `[Outstanding Context]` are tagged `[RESOLVED]` when the file they reference was subsequently edited, letting the model skip stale errors.
 - **Task-boundary-aware cut** — compaction splits at complete conversational turns, not mid-tool-call. If the assistant's response is in-flight (unmatched tool calls), the cut pushes back to keep the whole turn in the tail.
 - **Structured anchors** — `[Anchors]` section lists commit hashes, error IDs, and key file paths for zero-tool-call recall. The model can find references at a glance instead of calling `vcc_recall`.
-- **Per-model compaction thresholds** — configure different `reserveTokens` per model, so models with different context windows compact at the right time. Works in both directions: compact earlier for small-context models, compact later for large-context ones. Applies to both pi-vcc and pi-core compaction. Proactive triggering on `agent_end` and `model_select` events.
+- **Per-model and global compaction thresholds** — configure different `reserveTokens` or `compactPercent` per model and globally, so models with different context windows compact at the right time. Works in both directions: compact earlier for small-context models, compact later for large-context ones. Applies to both pi-vcc and pi-core compaction. Proactive triggering on `agent_end` and `model_select` events.
 
 ## Install
 
@@ -559,34 +559,36 @@ Config lives at `~/.pi/agent/pi-vcc-config.json` (auto-scaffolded on first load 
   "debug": false,
   "modelThresholds": {
     "neuralwatt/zai-org/GLM-5.1-FP8": { "reserveTokens": 32768 },
-    "neuralwatt/moonshotai/Kimi-K2.6": { "reserveTokens": 16384 },
-    "neuralwatt/neuralwatt/glm-5.1-long": { "reserveTokens": 65536 }
+    "neuralwatt/moonshotai/Kimi-K2.6": { "compactPercent": 65 },
+    "neuralwatt/neuralwatt/glm-5.1-long": { "compactPercent": 80 }
   },
-  "defaultThreshold": { "reserveTokens": 16384 }
+  "globalThreshold": { "compactPercent": 70 }
 }
 ```
 
 - **`overrideDefaultCompaction`** *(default `true`)*: when `true` (default), pi-vcc handles all compaction paths (`/compact`, auto-threshold, `/pi-vcc`). Set `false` to let pi core handle `/compact` and auto-threshold compactions via its default LLM-based compaction.
 - **`debug`** *(default `false`)*: when `true`, each compaction writes detailed info to `/tmp/pi-vcc-debug.json` — message counts, cut boundary, summary preview, sections.
 - **`modelThresholds`** *(default: none)*: per-model compaction thresholds. Keys match against `"provider/modelId"` (e.g., `"neuralwatt/zai-org/GLM-5.1-FP8"`) or just `"modelId"` (e.g., `"GLM-5.1"` — matched only when `provider/modelId` doesn't). Each value has:
-  - **`reserveTokens`**: tokens to reserve for the LLM response. Overrides pi-core's global `compaction.reserveTokens` for matching models. Controls *when* compaction triggers: `contextTokens > contextWindow − reserveTokens`. A higher value compacts earlier (more conservative); a lower value lets context grow larger.
+  - **`reserveTokens`**: tokens to reserve for the LLM response. Overrides pi-core's global `compaction.reserveTokens` for matching models. Controls *when* compaction triggers: `contextTokens > contextWindow − reserveTokens`. A higher value compacts earlier (more conservative); a lower value lets context grow larger. Takes precedence over `compactPercent` when both are set.
+  - **`compactPercent`**: compaction trigger as a percentage of context window (1–99). Compaction fires when `contextTokens > contextWindow × compactPercent / 100`. E.g. `65` means "compact when context is 65% full". Ignored when `reserveTokens` is also set.
   - **`keepRecentTokens`** *(optional)*: advisory token budget for pi-core's default compaction. Pi-vcc's own `buildOwnCut` uses task-boundary heuristics, so this only affects pi-core's cut when `overrideDefaultCompaction` is `false`.
-- **`defaultThreshold`** *(default: none)*: fallback threshold for models not matched by `modelThresholds`. If omitted, pi-core's global `compaction.reserveTokens` applies (no override).
+- **`globalThreshold`** *(default: none)*: global threshold applied to all models not matched by `modelThresholds`. Uses `compactPercent` or `reserveTokens` (`compactPercent` is easier — e.g. `65` means "compact at 65% full"). If omitted, pi-core's global `compaction.reserveTokens` applies (no override).
+- **`defaultThreshold`** *(default: none, deprecated)*: use `globalThreshold` instead. Backward compatible — still works.
 
-### How per-model thresholds work
+### How compaction thresholds work
 
 Pi-core's auto-compaction triggers when `contextTokens > contextWindow − reserveTokens`. The global `reserveTokens` (default 16384) is one-size-fits-all — but different models have very different context windows and cost profiles.
 
-Pi-vcc's per-model thresholds control compaction timing in **both directions**:
+Pi-vcc's thresholds control compaction timing in **both directions**, and work at both the per-model and global level:
 
 | Direction | How it works |
 |---|---|
 | **Compact later** (model can handle more context) | `session_before_compact` cancels compaction when context hasn't crossed the model's threshold. The global threshold might trigger compaction prematurely for a model with a large context window. |
-| **Compact earlier** (model needs compaction sooner) | `agent_end` and `model_select` proactively trigger compaction when context exceeds the model's threshold but hasn't hit the global threshold yet. |
+| **Compact earlier** (model needs compaction sooner) | `agent_end` and `model_select` proactively trigger compaction when context exceeds the model's threshold but hasn't hit the global threshold yet. The `globalThreshold` also proactively triggers for unmatched models. |
 
-This works regardless of whether pi-vcc or pi-core handles the actual summary (`overrideDefaultCompaction` true or false) — per-model thresholds control the *when*, not the *how*.
+This works regardless of whether pi-vcc or pi-core handles the actual summary (`overrideDefaultCompaction` true or false) — compaction thresholds control the *when*, not the *how*.
 
-Key matching order: exact `"provider/modelId"` → `"modelId"` → `defaultThreshold` → pi-core's global setting.
+Key matching order: exact `"provider/modelId"` → `"modelId"` → `globalThreshold` → pi-core's global setting.
 
 Explicit `/pi-vcc` commands bypass threshold checks — if you ask for compaction, you get it.
 

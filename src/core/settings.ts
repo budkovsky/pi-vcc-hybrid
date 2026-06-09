@@ -7,7 +7,7 @@ const settingsPath = (): string => process.env.PI_VCC_CONFIG_PATH ?? SETTINGS_PA
 /** Backwards-compat export. Resolves at access time, not import time. */
 const SETTINGS_PATH = settingsPath();
 
-/** Per-model compaction threshold override. */
+/** Per-model or global compaction threshold. */
 export interface ModelThreshold {
   /**
    * Tokens to reserve for LLM response. Overrides pi-core's
@@ -18,8 +18,20 @@ export interface ModelThreshold {
    *
    * A higher value compacts earlier (more conservative); a lower value
    * lets context grow larger before compacting.
+   *
+   * Takes precedence over compactPercent when both are set.
    */
-  reserveTokens: number;
+  reserveTokens?: number;
+  /**
+   * Compaction trigger as a percentage of context window (1–99).
+   * Compaction fires when: contextTokens > contextWindow × compactPercent / 100
+   *
+   * E.g. compactPercent: 65 means "compact when context is 65% full",
+   * equivalent to reserveTokens = 35% of contextWindow.
+   *
+   * Ignored when reserveTokens is also set.
+   */
+  compactPercent?: number;
   /**
    * Recent tokens to keep (not summarized) when pi-core handles compaction.
    *
@@ -49,14 +61,21 @@ export interface PiVccSettings {
    * "provider/modelId" (e.g., "neuralwatt/zai-org/GLM-5.1-FP8") or
    * just "modelId" (e.g., "GLM-5.1-FP8").
    *
-   * When a model matches, its reserveTokens overrides pi-core's global
-   * compaction.reserveTokens for the *when to compact* decision.
-   * This lets different models compact at different context fill levels.
+   * When a model matches, its reserveTokens/compactPercent overrides
+   * pi-core's global compaction.reserveTokens for the *when to compact*
+   * decision. This lets different models compact at different context
+   * fill levels.
    */
   modelThresholds?: Record<string, ModelThreshold>;
   /**
-   * Default threshold for models not matched by modelThresholds.
-   * If omitted, pi-core's global compaction settings apply (no override).
+   * Global threshold applied to all models not matched by modelThresholds.
+   * Uses compactPercent or reserveTokens (compactPercent is easier — e.g.
+   * 65 means "compact at 65% full"). If omitted, pi-core's global
+   * compaction settings apply (no override).
+   */
+  globalThreshold?: ModelThreshold;
+  /**
+   * @deprecated Use globalThreshold instead.
    */
   defaultThreshold?: ModelThreshold;
 }
@@ -71,15 +90,15 @@ const DEFAULT_SETTINGS: PiVccSettings = {
  *
  * Lookup order:
  *  1. Exact match on "provider/modelId" key
-   *  2. Exact match on "modelId" key
-   *  4. defaultThreshold from settings
-   *  5. undefined (no override — pi-core's global settings apply)
+ *  2. Exact match on "modelId" key
+ *  4. globalThreshold from settings
+ *  5. undefined (no override — pi-core's global settings apply)
  */
 export function getModelThreshold(
   settings: PiVccSettings,
   model: { id: string; provider?: string } | undefined,
 ): ModelThreshold | undefined {
-  if (!model) return settings.defaultThreshold;
+  if (!model) return settings.globalThreshold ?? settings.defaultThreshold;
 
   const providerModelId = model.provider ? `${model.provider}/${model.id}` : undefined;
 
@@ -93,7 +112,28 @@ export function getModelThreshold(
     return settings.modelThresholds[model.id];
   }
 
-  return settings.defaultThreshold;
+  return settings.globalThreshold ?? settings.defaultThreshold;
+}
+
+/**
+ * Resolve the effective reserveTokens for a threshold, handling both
+ * absolute (reserveTokens) and percentage (compactPercent) modes.
+ *
+ * Returns the number of tokens to reserve, or undefined if the
+ * threshold is not usable (no reserveTokens, no compactPercent,
+ * or compactPercent out of range).
+ */
+export function resolveReserveTokens(
+  threshold: ModelThreshold,
+  contextWindow: number,
+): number | undefined {
+  if (threshold.reserveTokens != null) return threshold.reserveTokens;
+  if (threshold.compactPercent != null && contextWindow > 0) {
+    const pct = threshold.compactPercent;
+    if (pct < 1 || pct > 99) return undefined;
+    return Math.round(contextWindow * (1 - pct / 100));
+  }
+  return undefined;
 }
 
 const readJson = (path: string): Record<string, unknown> | null => {
@@ -107,7 +147,12 @@ const readJson = (path: string): Record<string, unknown> | null => {
 export function loadSettings(): PiVccSettings {
   const parsed = readJson(settingsPath());
   if (!parsed || typeof parsed !== "object") return { ...DEFAULT_SETTINGS };
-  return { ...DEFAULT_SETTINGS, ...(parsed as Partial<PiVccSettings>) };
+  const loaded = { ...DEFAULT_SETTINGS, ...(parsed as Partial<PiVccSettings>) };
+  // Backward compat: defaultThreshold → globalThreshold
+  if (!loaded.globalThreshold && (parsed as any).defaultThreshold) {
+    loaded.globalThreshold = (parsed as any).defaultThreshold;
+  }
+  return loaded;
 }
 
 /**

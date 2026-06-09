@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { getModelThreshold, type PiVccSettings, type ModelThreshold } from "../src/core/settings";
+import { getModelThreshold, resolveReserveTokens, type PiVccSettings, type ModelThreshold } from "../src/core/settings";
 
 const t = (reserveTokens: number, keepRecentTokens?: number): ModelThreshold => ({
   reserveTokens,
@@ -108,6 +108,46 @@ describe("getModelThreshold", () => {
     expect(getModelThreshold(settings, { id: "Kimi-K2.6", provider: "neuralwatt" })).toEqual(t(8192));
   });
 
+  test("returns globalThreshold when model doesn't match any key", () => {
+    const threshold: ModelThreshold = { compactPercent: 65 };
+    const settings: PiVccSettings = {
+      overrideDefaultCompaction: true,
+      debug: false,
+      modelThresholds: { "neuralwatt/GLM-5.1": t(32768) },
+      globalThreshold: threshold,
+    };
+    expect(getModelThreshold(settings, { id: "other-model", provider: "other" })).toEqual(threshold);
+  });
+
+  test("globalThreshold takes precedence over defaultThreshold", () => {
+    const settings: PiVccSettings = {
+      overrideDefaultCompaction: true,
+      debug: false,
+      globalThreshold: t(65536),
+      defaultThreshold: t(8192),
+    };
+    expect(getModelThreshold(settings, { id: "unknown", provider: "other" })).toEqual(t(65536));
+  });
+
+  test("returns globalThreshold when model is undefined", () => {
+    const threshold: ModelThreshold = { compactPercent: 70 };
+    const settings: PiVccSettings = {
+      overrideDefaultCompaction: true,
+      debug: false,
+      globalThreshold: threshold,
+    };
+    expect(getModelThreshold(settings, undefined)).toEqual(threshold);
+  });
+
+  test("falls back to defaultThreshold when globalThreshold is not set", () => {
+    const settings: PiVccSettings = {
+      overrideDefaultCompaction: true,
+      debug: false,
+      defaultThreshold: t(8192),
+    };
+    expect(getModelThreshold(settings, { id: "unknown", provider: "other" })).toEqual(t(8192));
+  });
+
   test("works with multiple modelThresholds entries", () => {
     const settings: PiVccSettings = {
       overrideDefaultCompaction: true,
@@ -124,5 +164,60 @@ describe("getModelThreshold", () => {
     expect(getModelThreshold(settings, { id: "moonshotai/Kimi-K2.6", provider: "neuralwatt" })).toEqual(t(65536));
     expect(getModelThreshold(settings, { id: "deepseek-ai/DeepSeek-V4-Pro", provider: "makora" })).toEqual(t(32768));
     expect(getModelThreshold(settings, { id: "unknown-model", provider: "other" })).toEqual(t(16384));
+  });
+});
+
+describe("resolveReserveTokens", () => {
+  test("returns reserveTokens when set", () => {
+    expect(resolveReserveTokens({ reserveTokens: 32768 }, 128000)).toBe(32768);
+  });
+
+  test("returns undefined when neither reserveTokens nor compactPercent is set", () => {
+    expect(resolveReserveTokens({}, 128000)).toBeUndefined();
+  });
+
+  test("returns undefined when only keepRecentTokens is set", () => {
+    expect(resolveReserveTokens({ keepRecentTokens: 20000 }, 128000)).toBeUndefined();
+  });
+
+  test("computes reserveTokens from compactPercent", () => {
+    // compactPercent: 65 on 128k window → reserve = 128000 * (1 - 65/100) = 44800
+    expect(resolveReserveTokens({ compactPercent: 65 }, 128000)).toBe(44800);
+  });
+
+  test("compactPercent: 50 → reserve is exactly half", () => {
+    expect(resolveReserveTokens({ compactPercent: 50 }, 200000)).toBe(100000);
+  });
+
+  test("compactPercent: 80 → reserve is 20%", () => {
+    expect(resolveReserveTokens({ compactPercent: 80 }, 200000)).toBe(40000);
+  });
+
+  test("reserveTokens takes precedence over compactPercent", () => {
+    expect(resolveReserveTokens({ reserveTokens: 32768, compactPercent: 65 }, 128000)).toBe(32768);
+  });
+
+  test("returns undefined for compactPercent < 1", () => {
+    expect(resolveReserveTokens({ compactPercent: 0 }, 128000)).toBeUndefined();
+  });
+
+  test("returns undefined for compactPercent > 99", () => {
+    expect(resolveReserveTokens({ compactPercent: 100 }, 128000)).toBeUndefined();
+  });
+
+  test("returns undefined when contextWindow is 0", () => {
+    expect(resolveReserveTokens({ compactPercent: 65 }, 0)).toBeUndefined();
+  });
+
+  test("reserveTokens still works when contextWindow is 0", () => {
+       expect(resolveReserveTokens({ reserveTokens: 32768 }, 0)).toBe(32768);
+  });
+
+  test("compactPercent = 1 → reserve is 99% of contextWindow", () => {
+    expect(resolveReserveTokens({ compactPercent: 1 }, 128000)).toBe(126720);
+  });
+
+  test("compactPercent = 99 → reserve is 1% of contextWindow", () => {
+    expect(resolveReserveTokens({ compactPercent: 99 }, 128000)).toBe(1280);
   });
 });

@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { writeFileSync } from "fs";
 import { compile, type CompileInput } from "../core/summarize";
-import { loadSettings, getModelThreshold, type PiVccSettings } from "../core/settings";
+import { loadSettings, getModelThreshold, resolveReserveTokens, type PiVccSettings } from "../core/settings";
 import { isProactiveTriggerActive } from "./proactive-threshold";
 import { triggerInvisibleContinue } from "../core/invisible-continue";
 import type { PiVccCompactionDetails } from "../details";
@@ -224,13 +224,14 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
       const threshold = getModelThreshold(settings, ctx.model);
       if (threshold) {
         const contextWindow = ctx.model?.contextWindow ?? 0;
-        if (contextWindow > 0) {
-          const effectiveThreshold = contextWindow - threshold.reserveTokens;
+        const reserve = resolveReserveTokens(threshold, contextWindow);
+        if (reserve != null && contextWindow > 0) {
+          const effectiveThreshold = contextWindow - reserve;
           if (preparation.tokensBefore <= effectiveThreshold) {
             try {
               const pct = Math.round((preparation.tokensBefore / contextWindow) * 100);
               ctx?.ui?.notify?.(
-                `pi-vcc: Skipped compaction — ${pct}% of context window used (model threshold: ${formatTokens(effectiveThreshold)} tok)`,
+                `pi-vcc: Skipped compaction — ${pct}% of context window used (threshold: ${formatTokens(effectiveThreshold)} tok)`,
                 "info",
               );
             } catch {}
