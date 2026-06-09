@@ -424,12 +424,12 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
     //
     // We do NOT continue when:
     // - Last message is user/toolResult (agent can continue naturally)
-    // - Last message is assistant with stopReason=end_turn (task finished)
+    // - Last message is assistant with stopReason=stop (task finished)
     // - The compaction entry's firstKeptEntryId is non-empty and the tail
     //   includes a user message (the next user prompt will drive the loop)
     //
     // We DO continue when:
-    // - Last message is assistant with stopReason=tool_use (mid-tool cycle)
+    // - Last message is assistant with stopReason=toolUse (mid-tool cycle)
     // - Last message is assistant with stopReason=length (hit max tokens)
     // - last message is assistant with stopReason=error (API error, but
     //   pi-retry may handle these — only continue for non-retryable stalls)
@@ -449,7 +449,10 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
       if (!lastMsg || lastMsg.role !== "assistant") return;
 
       // Agent completed its turn cleanly — no continuation needed
-      if (lastMsg.stopReason === "end_turn") return;
+      if (lastMsg.stopReason === "stop") return;
+
+      // Agent was aborted by user — don't auto-continue
+      if (lastMsg.stopReason === "aborted") return;
 
       // Agent was mid-task (tool_use, length, or error) — needs to continue.
       // For errors, pi-retry may handle the retry itself, but it doesn't
