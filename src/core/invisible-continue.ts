@@ -16,6 +16,13 @@ import { Agent } from "@earendil-works/pi-agent-core";
 let _agent: Agent | null = null;
 let _continueInProgress = false;
 
+// Timestamp of the last completed triggerInvisibleContinue().
+// Used by the continue() monkey-patch to detect when triggerInvisibleContinue
+// just ran (so it shouldn't fall back to prompt([]) again — the agent
+// already continued). This prevents double continuation when both
+// pi-retry and pi-vcc are installed.
+let _lastInvisibleContinueTime = 0;
+
 // Monkey-patch Agent.prototype.subscribe to capture the live instance.
 // Chain the previous patch (if pi-retry already patched it) so both
 // extensions can coexist.
@@ -83,7 +90,14 @@ Agent.prototype.continue = function (this: Agent) {
         // The while loop in _runAgentPrompt stays alive because prompt([])
         // runs the agent (which emits events, updates _lastAssistantMessage,
         // etc.).
-        if (!_continueInProgress) {
+        //
+        // Guard: if triggerInvisibleContinue() just completed (within the
+        // last 500ms), the agent already continued — skip the fallback to
+        // avoid double continuation. This happens when both pi-retry and
+        // pi-vcc are installed: pi-retry's triggerInvisibleContinue runs
+        // first, then the session's continue() wrapper unblocks and would
+        // fall back to prompt([]) again.
+        if (!_continueInProgress && Date.now() - _lastInvisibleContinueTime > 500) {
           _continueInProgress = true;
           try {
             await self.prompt([]);
@@ -139,6 +153,10 @@ export function triggerInvisibleContinue(): void {
       }
     } finally {
       _continueInProgress = false;
+      // Record completion time so the continue() monkey-patch can
+      // detect that an invisible continue just ran and avoid firing
+      // a duplicate prompt([]) (RC7: double continuation guard).
+      _lastInvisibleContinueTime = Date.now();
     }
   };
 
@@ -148,4 +166,5 @@ export function triggerInvisibleContinue(): void {
 /** Reset state on new session. */
 export function resetInvisibleContinue(): void {
   _continueInProgress = false;
+  _lastInvisibleContinueTime = 0;
 }

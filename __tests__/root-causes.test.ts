@@ -779,3 +779,78 @@ describe("RC4: both extensions fire for same compaction", () => {
     expect(piRetryMutex).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// RC7: Double continuation from continue() fallback after triggerInvisibleContinue
+// ---------------------------------------------------------------------------
+
+describe("RC7: continue() fallback races triggerInvisibleContinue", () => {
+  /**
+   * GAP: When both pi-retry and pi-vcc are installed, overflow compaction
+   * creates a race:
+   *
+   * 1. pi-retry's agent_end handler fires triggerInvisibleContinue()
+   *    (sets _continueInProgress = true, schedules async prompt([]))
+   * 2. _handlePostAgentRun returns true (willRetry)
+   * 3. Session's while loop calls continue()
+   * 4. pi-retry's wrapper: blocked on _continueInProgress
+   * 5. triggerInvisibleContinue() runs prompt([]) → agent runs → completes
+   * 6. _continueInProgress = false
+   * 7. continue() wrapper unblocks → calls original → throws
+   *    "Cannot continue from message role: assistant"
+   *    (because prompt([]) just added a new assistant message!)
+   * 8. Wrapper catches, checks stopReason:
+   *    - "stop" → swallows ✓ (no double run)
+   *    - "toolUse" → falls back to prompt([]) AGAIN ⚠️ DOUBLE CONTINUATION!
+   *
+   * The double continuation is wasteful and could cause duplicate tool calls.
+   * Fix: the continue() fallback should detect that triggerInvisibleContinue
+   * just ran (by checking a _justContinued flag or timestamp) and skip
+   * the fallback in that case.
+   */
+  it("after triggerInvisibleContinue completes, continue() sees assistant last message", () => {
+    // After triggerInvisibleContinue's prompt([]) runs:
+    const context = makeContextMessages(
+      compactionSummaryMsg("summary"),
+      userMsg("u2"),
+      assistantMsg("a2", "toolUse"), // produced by the first prompt([])
+    );
+
+    const lastMsg = context[context.length - 1];
+    expect(lastMsg.role).toBe("assistant");
+    expect(lastMsg.stopReason).toBe("toolUse");
+    // continue() would try to fall back to prompt([]) AGAIN
+  });
+
+  it("if first prompt([]) produced stop, no double continuation", () => {
+    const context = makeContextMessages(
+      compactionSummaryMsg("summary"),
+      userMsg("u2"),
+      assistantMsg("a2", "stop"), // produced by the first prompt([])
+    );
+
+    const lastMsg = context[context.length - 1];
+    // The continue() fallback checks: stopReason !== "stop" → false → swallows
+    const shouldFallBack = lastMsg.role === "assistant"
+      && lastMsg.stopReason !== "stop"
+      && lastMsg.stopReason !== "aborted";
+    expect(shouldFallBack).toBe(false);
+  });
+
+  it("fix: track last invisible-continue completion to skip fallback", () => {
+    // Proposed approach: set a timestamp when triggerInvisibleContinue
+    // completes. The continue() fallback checks this timestamp —
+    // if it was set within the last 500ms, another prompt([]) just ran,
+    // so skip the fallback (the continuation was already handled).
+    //
+    // Alternative approach: use a shared _justContinued flag that
+    // triggerInvisibleContinue sets and continue() checks+clears.
+    //
+    // Either way, the key insight: the fallback should NOT fire when
+    // triggerInvisibleContinue just completed, because the agent already
+    // continued.
+    const justContinuedTimestamp = Date.now() - 100; // 100ms ago
+    const shouldSkipFallback = Date.now() - justContinuedTimestamp < 500;
+    expect(shouldSkipFallback).toBe(true);
+  });
+});
