@@ -142,4 +142,77 @@ describe("buildOwnCut", () => {
     expect(r.compactAll).toBe(true);
     expect(r.firstKeptEntryId).toBe("");
   });
+
+  test("matched tool calls do NOT push cut back to previous user", () => {
+    // Regression: toolResult messages carry toolCallId at the message level,
+    // not as a content part. The old code looked for part.type==="toolResult"
+    // in content (which never matches), causing every toolCall to appear
+    // "unmatched" and pushing the cut back one user turn.
+    const r = buildOwnCut([
+      msg("u1", "user", "first prompt"),
+      msg("a1", "assistant", [{ type: "text", text: "let me check" }, { type: "toolCall", id: "tc_1", name: "read", arguments: { path: "foo.ts" } }]),
+      { id: "t1", type: "message", message: { role: "toolResult", toolCallId: "tc_1", toolName: "read", content: [{ type: "text", text: "file contents" }], isError: false } },
+      msg("u2", "user", "second prompt"),
+      msg("a2", "assistant", [{ type: "text", text: "done" }]),
+    ]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // Cut should be at u2 (second user) since tc_1 has a matching toolResult
+    expect(r.compactAll).toBe(false);
+    expect(r.firstKeptEntryId).toBe("u2");
+    expect(r.messages).toHaveLength(3); // u1, a1, t1
+  });
+
+  test("unmatched tool call still pushes cut back", () => {
+    // When a toolCall genuinely has no toolResult, the cut should still
+    // push back to keep the in-progress turn in the tail.
+    const r = buildOwnCut([
+      msg("u1", "user", "first prompt"),
+      msg("a1", "assistant", "response 1"),
+      msg("u2", "user", "second prompt"),
+      msg("a2", "assistant", "response 2"),
+      msg("u3", "user", "third prompt"),
+      msg("a3", "assistant", [{ type: "text", text: "checking" }, { type: "toolCall", id: "tc_unmatched", name: "bash", arguments: { command: "ls" } }]),
+    ]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // tc_unmatched has no toolResult → push cut back from u3 to u2
+    expect(r.compactAll).toBe(false);
+    expect(r.firstKeptEntryId).toBe("u2");
+  });
+
+  test("Anthropic-style session: many matched toolCalls should not cause compact-all", () => {
+    // Simulates the real Anthropic pattern: 2 user messages with many matched
+    // toolCall/toolResult pairs between them. The bug caused all toolCalls to
+    // appear "unmatched" → cut pushed back to first user → compact-all.
+    const entries: any[] = [
+      msg("u1", "user", "help me find bugs"),
+    ];
+    // Add 5 matched tool cycles (assistant with toolCall + toolResult)
+    for (let i = 1; i <= 5; i++) {
+      entries.push({ id: `a${i}`, type: "message", message: { role: "assistant", content: [
+        { type: "thinking", thinking: `thinking ${i}` },
+        { type: "toolCall", id: `tc_${i}`, name: "read", arguments: { path: `file${i}.ts` } },
+      ] } });
+      entries.push({ id: `t${i}`, type: "message", message: { role: "toolResult", toolCallId: `tc_${i}`, toolName: "read", content: [{ type: "text", text: `file ${i} contents` }], isError: false } });
+    }
+    // Second user message
+    entries.push(msg("u2", "user", "now fix the bug"));
+    // More matched tool cycles after second user
+    for (let i = 6; i <= 8; i++) {
+      entries.push({ id: `a${i}`, type: "message", message: { role: "assistant", content: [
+        { type: "toolCall", id: `tc_${i}`, name: "edit", arguments: { path: `file${i}.ts` } },
+      ] } });
+      entries.push({ id: `t${i}`, type: "message", message: { role: "toolResult", toolCallId: `tc_${i}`, toolName: "edit", content: [{ type: "text", text: `edited file ${i}` }], isError: false } });
+    }
+    entries.push(msg("a9", "assistant", "all done"));
+
+    const r = buildOwnCut(entries);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // Cut should be at u2 — all toolCalls after u1 have matching toolResults
+    // and all toolCalls after u2 also have matching toolResults
+    expect(r.compactAll).toBe(false);
+    expect(r.firstKeptEntryId).toBe("u2");
+  });
 });

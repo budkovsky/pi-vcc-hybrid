@@ -158,6 +158,11 @@ export function buildOwnCut(branchEntries: any[]): OwnCutResult {
     for (let i = cutIdx + 1; i < liveMessages.length; i++) {
       const msg = liveMessages[i].message;
       if (msg.role === "user") break; // next turn starts
+      // toolResult messages carry toolCallId at the message level, not in content parts
+      if (msg.role === "toolResult" && (msg as any).toolCallId) {
+        toolResultIds.add((msg as any).toolCallId);
+        continue;
+      }
       const content = msg.content;
       if (typeof content === "string" || !Array.isArray(content)) continue;
       for (const part of content) {
