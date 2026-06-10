@@ -97,6 +97,59 @@ export type OwnCutResult =
   | { ok: true; messages: any[]; firstKeptEntryId: string; compactAll: boolean }
   | { ok: false; reason: OwnCutCancelReason };
 
+/**
+ * Find a completed tool-call cycle boundary in the first half of the
+ * live messages. Used when there's only a single user message and we
+ * can't cut at a task boundary.
+ *
+ * Scans for completed assistant→toolResult cycles and returns the index
+ * of the last toolResult in the cycle nearest the midpoint.
+ */
+const findMidCycleBoundary = (liveMessages: EntryWithMessage[]): number => {
+  const cycles: number[] = []; // end indices (toolResult) of completed cycles
+  let currentAssistantIdx = -1;
+  const pendingCalls = new Set<string>();
+
+  for (let i = 0; i < liveMessages.length; i++) {
+    const msg = liveMessages[i].message;
+    if (msg.role === "user") continue;
+    if (msg.role === "assistant") {
+      currentAssistantIdx = i;
+      pendingCalls.clear();
+      const content = msg.content;
+      if (Array.isArray(content)) {
+        for (const part of content) {
+          if (part.type === "toolCall" && part.id) pendingCalls.add(part.id);
+        }
+      }
+      continue;
+    }
+    if (msg.role === "toolResult") {
+      const callId = (msg as any).toolCallId as string | undefined;
+      if (callId) pendingCalls.delete(callId);
+      if (pendingCalls.size === 0 && currentAssistantIdx >= 0) {
+        cycles.push(i);
+        currentAssistantIdx = -1;
+      }
+    }
+  }
+
+  if (cycles.length === 0) return -1;
+
+  // Pick the cycle nearest the midpoint of the first half
+  const targetIdx = Math.floor(liveMessages.length / 2);
+  let best = cycles[0];
+  let bestDist = Math.abs(cycles[0] - targetIdx);
+  for (let i = 1; i < cycles.length; i++) {
+    const dist = Math.abs(cycles[i] - targetIdx);
+    if (dist < bestDist) {
+      best = cycles[i];
+      bestDist = dist;
+    }
+  }
+  return best;
+};
+
 export function buildOwnCut(branchEntries: any[]): OwnCutResult {
   // Find the last compaction entry and its firstKeptEntryId
   let lastCompactionIdx = -1;
@@ -183,12 +236,21 @@ export function buildOwnCut(branchEntries: any[]): OwnCutResult {
   }
 
   if (cutIdx <= 0) {
-    // Single user prompt scenario (or no user at all).
-    // Compact EVERYTHING and keep no tail. This handles both:
-    //  - Single user prompt at index 0: compact all, fresh start after summary
-    //  - No user message at all (e.g., long assistant/tool chain): still compact
-    //    to recover from context overflow rather than cancelling and leaving
-    //    the session unrecoverable.
+    // Single user prompt (or no user at all) with a long agentic chain.
+    // Instead of compact-all (which destroys the tail), find a completed
+    // tool-call cycle boundary in the first half and cut there. This
+    // preserves the later part of the session while summarizing the earlier
+    // tool-call cycles.
+    const cycleEndIdx = findMidCycleBoundary(liveMessages);
+    if (cycleEndIdx > 0 && cycleEndIdx < liveMessages.length - 1) {
+      return {
+        ok: true,
+        messages: liveMessages.slice(0, cycleEndIdx + 1).map((e) => e.message),
+        firstKeptEntryId: liveMessages[cycleEndIdx + 1].entry.id,
+        compactAll: false,
+      };
+    }
+    // No completed cycle boundary found — fall back to compact-all as last resort.
     // firstKeptEntryId="" is a sentinel: pi-core's buildSessionContext won't match it
     // (so 0 kept from pre-compaction), and next buildOwnCut triggers orphan recovery.
     return {

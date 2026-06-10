@@ -73,9 +73,10 @@ describe("buildOwnCut", () => {
     expect(r.messages).toHaveLength(2);
   });
 
-  test("single user prompt + autonomous tail: compact all", () => {
-    // The Discord scenario: user types 1 prompt, agent runs autonomously
+  test("single user prompt + autonomous tail: cut at mid-cycle boundary", () => {
+    // The agentic scenario: user types 1 prompt, agent runs autonomously
     // (assistant + toolResult interleaved). No user > idx 0.
+    // Instead of compact-all, find a completed tool-cycle boundary.
     const r = buildOwnCut([
       msg("m1", "user", "go"),
       msg("m2", "assistant", "calling tool"),
@@ -86,9 +87,13 @@ describe("buildOwnCut", () => {
     ]);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.compactAll).toBe(true);
-    expect(r.firstKeptEntryId).toBe("");
-    expect(r.messages).toHaveLength(6);
+    expect(r.compactAll).toBe(false);
+    // Should cut after the first completed cycle (m2→m3) or the second (m4→m5)
+    // Mid-cycle logic picks nearest to midpoint of 6 = index 3
+    // Cycle 1 ends at m3 (idx 3), cycle 2 ends at m5 (idx 5)
+    // Distance: |3-3|=0 vs |5-3|=2, so picks m3
+    expect(r.firstKeptEntryId).toBe("m4");
+    expect(r.messages).toHaveLength(3); // m1, m2, m3
   });
 
   test("no user message: compact-all instead of cancelling", () => {
@@ -128,7 +133,9 @@ describe("buildOwnCut", () => {
     expect(r.messages).toHaveLength(4); // u1, a1, u2, a2
   });
 
-  test("compact-all then single user msg + autonomous: compact all again", () => {
+  test("compact-all then single user msg + autonomous: cut at mid-cycle boundary", () => {
+    // After compact-all, only 1 user message in orphan range. Should find
+    // a completed tool-cycle boundary instead of compacting all again.
     const r = buildOwnCut([
       msg("o1", "user", "old"),
       comp("c1", ""),
@@ -139,8 +146,10 @@ describe("buildOwnCut", () => {
     ]);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.compactAll).toBe(true);
-    expect(r.firstKeptEntryId).toBe("");
+    // Single user at idx 0 of live range → mid-cycle boundary
+    // Live messages: [u1, a1, t1, a2]. Midpoint=2. Completed cycle ends at t1 (idx 2).
+    expect(r.compactAll).toBe(false);
+    expect(r.firstKeptEntryId).toBe("a2");
   });
 
   test("matched tool calls do NOT push cut back to previous user", () => {

@@ -84,7 +84,7 @@ describe("buildOwnCut", () => {
     expect(result.firstKeptEntryId).toBe(entries[2].id);
   });
 
-  it("compact-all when only one user message (3+ live messages)", () => {
+  it("mid-cycle cut when only one user message (3+ live messages)", () => {
     const entries = [
       makeUserEntry("u1"),
       makeAssistantEntry("a1", "stop"),
@@ -93,6 +93,8 @@ describe("buildOwnCut", () => {
     const result = buildOwnCut(entries);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
+    // Single user at idx 0 → mid-cycle boundary instead of compact-all
+    // But there are no toolResult messages, so no completed cycles → still compact-all
     expect(result.compactAll).toBe(true);
   });
 

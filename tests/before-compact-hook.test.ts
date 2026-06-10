@@ -164,7 +164,7 @@ describe("registerBeforeCompactHook: compact-all path", () => {
     if (existsSync(DEBUG_PATH)) unlinkSync(DEBUG_PATH);
   });
 
-  test("single-user + autonomous tail → returns compaction with empty firstKeptEntryId", () => {
+  test("single-user + autonomous tail → cuts at mid-cycle boundary", () => {
     setConfig({ debug: false, overrideDefaultCompaction: false });
     const { pi, invoke, notifyCalls } = createMockPi();
     registerBeforeCompactHook(pi);
@@ -177,7 +177,9 @@ describe("registerBeforeCompactHook: compact-all path", () => {
     ];
     const result = invoke(makeEvent(entries, PI_VCC_COMPACT_INSTRUCTION));
     expect(result.compaction).toBeDefined();
-    expect(result.compaction.firstKeptEntryId).toBe("");
+    // Single user at idx 0, completed cycle m2→m3 ends at idx 2 (midpoint=2)
+    // Cut after m3, keep from m4 onward
+    expect(result.compaction.firstKeptEntryId).toBe("m4");
     expect(notifyCalls).toHaveLength(0); // no cancel notify on success
   });
 });
