@@ -210,7 +210,7 @@ pi-vcc is one of four compaction approaches in the AI coding-agent ecosystem. He
 - **Error resolution detection** — tsc errors in `[Outstanding Context]` are tagged `[RESOLVED]` when the file they reference was subsequently edited, letting the model skip stale errors.
 - **Task-boundary-aware cut** — compaction splits at complete conversational turns, not mid-tool-call. If the assistant's response is in-flight (unmatched tool calls), the cut pushes back to keep the whole turn in the tail.
 - **Structured anchors** — `[Anchors]` section lists commit hashes, error IDs, and key file paths for zero-tool-call recall. The model can find references at a glance instead of calling `vcc_recall`.
-- **Per-model and global compaction thresholds** — configure different `reserveTokens` or `compactPercent` per model and globally, so models with different context windows compact at the right time. Works in both directions: compact earlier for small-context models, compact later for large-context ones. Applies to both pi-vcc and pi-core compaction. Proactive triggering on `agent_end` and `model_select` events.
+- **Per-model and global compaction thresholds** — configure different `reserveTokens` or `compactPercent` per model and globally, so models with different context windows compact at the right time. Proactive triggering on `agent_end` and `model_select` events compacts earlier for small-context models. Applies to both pi-vcc and pi-core compaction.
 
 ## Install
 
@@ -579,14 +579,15 @@ Config lives at `~/.pi/agent/pi-vcc-config.json` (auto-scaffolded on first load 
 
 Pi-core's auto-compaction triggers when `contextTokens > contextWindow − reserveTokens`. The global `reserveTokens` (default 16384) is one-size-fits-all — but different models have very different context windows and cost profiles.
 
-Pi-vcc's thresholds control compaction timing in **both directions**, and work at both the per-model and global level:
+Pi-vcc's thresholds provide proactive compaction at both the per-model and global level:
 
 | Direction | How it works |
 |---|---|
-| **Compact later** (model can handle more context) | `session_before_compact` cancels compaction when context hasn't crossed the model's threshold. The global threshold might trigger compaction prematurely for a model with a large context window. |
 | **Compact earlier** (model needs compaction sooner) | `agent_end` and `model_select` proactively trigger compaction when context exceeds the model's threshold but hasn't hit the global threshold yet. The `globalThreshold` also proactively triggers for unmatched models. |
 
-This works regardless of whether pi-vcc or pi-core handles the actual summary (`overrideDefaultCompaction` true or false) — compaction thresholds control the *when*, not the *how*.
+Previously, a "compact later" direction was implemented by cancelling compaction in `session_before_compact` when context was below the per-model threshold. This guard was removed because `session_before_compact` carries no reason field — manual `/compact` and auto-compaction are indistinguishable (both have `customInstructions: undefined`), so the guard was blocking explicit user compaction requests.
+
+The proactive trigger handles the "compact earlier" direction. If pi-core's global threshold fires before the per-model threshold is crossed, the compaction proceeds — slightly premature from the per-model threshold's perspective, but preferable to blocking an explicit user action.
 
 Key matching order: exact `"provider/modelId"` → `"modelId"` → `globalThreshold` → pi-core's global setting.
 
