@@ -19,7 +19,7 @@ afterAll(() => {
 });
 
 function createMockPi(model?: { id: string; provider?: string; contextWindow?: number }) {
-  let handler: ((event: any, ctx: any) => any) | undefined;
+  const handlers: Record<string, ((e: any, c: any) => any)[]> = {};
   const notifyCalls: Array<{ msg: string; level: string }> = [];
   const ctx = {
     hasUI: true,
@@ -30,15 +30,19 @@ function createMockPi(model?: { id: string; provider?: string; contextWindow?: n
       },
     },
   } as any;
-  return {
-    pi: {
-      on: (eventName: string, h: (e: any, c: any) => any) => {
-        if (eventName === "session_before_compact") handler = h;
-      },
-    } as any,
-    invoke: (event: any) => handler!(event, ctx),
-    notifyCalls,
+  const pi = {
+    on: (eventName: string, h: (e: any, c: any) => any) => {
+      if (!handlers[eventName]) handlers[eventName] = [];
+      handlers[eventName].push(h);
+    },
+  } as any;
+  const emit = (eventName: string, event: any = {}) => {
+    const hs = handlers[eventName] ?? [];
+    let result: any;
+    for (const h of hs) result = h(event, ctx);
+    return result;
   };
+  return { pi, ctx, emit, notifyCalls };
 }
 
 function setConfig(cfg: Record<string, unknown>) {
@@ -70,7 +74,12 @@ describe("session_before_compact: per-model threshold", () => {
     if (existsSync(CONFIG_PATH)) unlinkSync(CONFIG_PATH);
   });
 
-  test("cancels when context is below per-model threshold (provider/modelId)", () => {
+  test("compaction proceeds when context is below per-model threshold", () => {
+    // The threshold guard was removed because session_before_compact carries no
+    // reason field — manual /compact and auto-compaction are indistinguishable.
+    // The proactive trigger handles compacting earlier than pi-core's global
+    // threshold; this hook no longer blocks compaction that arrives before the
+    // per-model threshold.
     setConfig({
       debug: false,
       overrideDefaultCompaction: true,
@@ -78,27 +87,27 @@ describe("session_before_compact: per-model threshold", () => {
         "neuralwatt/GLM-5.1": { reserveTokens: 32768 },
       },
     });
-    const { pi, invoke, notifyCalls } = createMockPi({
+    const { pi, ctx, emit } = createMockPi({
       id: "GLM-5.1",
       provider: "neuralwatt",
       contextWindow: 200000,
     });
     registerBeforeCompactHook(pi);
 
-    // 100k tokens < 200k - 32768 = 167232 → below threshold
+    // 100k tokens < 200k - 32768 = 167232 → below threshold, but proceeds
     const entries = [
       msg("m1", "user", "hello"),
       msg("m2", "assistant", "hi"),
       msg("m3", "user", "do work"),
       msg("m4", "assistant", "done"),
     ];
-    const result = invoke(makeEvent(entries, undefined, 100000));
-    expect(result).toEqual({ cancel: true });
-    expect(notifyCalls.length).toBeGreaterThanOrEqual(1);
-    expect(notifyCalls[0].msg).toContain("Skipped compaction");
+    const result = emit("session_before_compact", makeEvent(entries, undefined, 100000));
+    // No longer cancelled — threshold guard removed
+    expect(result.cancel).toBeUndefined();
+    expect(result.compaction).toBeDefined();
   });
 
-  test("allows compaction when context exceeds per-model threshold", () => {
+  test("compaction proceeds when context exceeds per-model threshold", () => {
     setConfig({
       debug: false,
       overrideDefaultCompaction: true,
@@ -106,7 +115,7 @@ describe("session_before_compact: per-model threshold", () => {
         "neuralwatt/GLM-5.1": { reserveTokens: 32768 },
       },
     });
-    const { pi, invoke } = createMockPi({
+    const { pi, ctx, emit } = createMockPi({
       id: "GLM-5.1",
       provider: "neuralwatt",
       contextWindow: 200000,
@@ -120,64 +129,38 @@ describe("session_before_compact: per-model threshold", () => {
       msg("m3", "user", "do work"),
       msg("m4", "assistant", "done"),
     ];
-    const result = invoke(makeEvent(entries, undefined, 180000));
-    // Not cancelled — pi-vcc proceeds with its own summary
+    const result = emit("session_before_compact", makeEvent(entries, undefined, 180000));
     expect(result.cancel).toBeUndefined();
     expect(result.compaction).toBeDefined();
   });
 
-  test("cancels when context is below globalThreshold with compactPercent", () => {
+  test("compaction proceeds with globalThreshold compactPercent", () => {
     // compactPercent: 65 → reserve = 128000 * 0.35 = 44800 → threshold = 83200
     setConfig({
       debug: false,
       overrideDefaultCompaction: true,
       globalThreshold: { compactPercent: 65 },
     });
-    const { pi, invoke } = createMockPi({
+    const { pi, ctx, emit } = createMockPi({
       id: "some-model",
       provider: "some-provider",
       contextWindow: 128000,
     });
     registerBeforeCompactHook(pi);
 
-    // 50k tokens < 83200 → below threshold
+    // 50k tokens < 83200 → below threshold, but proceeds
     const entries = [
       msg("m1", "user", "hello"),
       msg("m2", "assistant", "hi"),
       msg("m3", "user", "do work"),
       msg("m4", "assistant", "done"),
     ];
-    const result = invoke(makeEvent(entries, undefined, 50000));
-    expect(result).toEqual({ cancel: true });
-  });
-
-  test("allows compaction when context exceeds globalThreshold with compactPercent", () => {
-    // compactPercent: 65 → reserve = 128000 * 0.35 = 44800 → threshold = 83200
-    setConfig({
-      debug: false,
-      overrideDefaultCompaction: true,
-      globalThreshold: { compactPercent: 65 },
-    });
-    const { pi, invoke } = createMockPi({
-      id: "some-model",
-      provider: "some-provider",
-      contextWindow: 128000,
-    });
-    registerBeforeCompactHook(pi);
-
-    // 100k tokens > 83200 → above threshold
-    const entries = [
-      msg("m1", "user", "hello"),
-      msg("m2", "assistant", "hi"),
-      msg("m3", "user", "do work"),
-      msg("m4", "assistant", "done"),
-    ];
-    const result = invoke(makeEvent(entries, undefined, 100000));
+    const result = emit("session_before_compact", makeEvent(entries, undefined, 50000));
     expect(result.cancel).toBeUndefined();
     expect(result.compaction).toBeDefined();
   });
 
-  test("cancels when context is below modelThreshold with compactPercent", () => {
+  test("compaction proceeds with modelThreshold compactPercent", () => {
     // compactPercent: 80 → reserve = 200000 * 0.20 = 40000 → threshold = 160000
     setConfig({
       debug: false,
@@ -186,68 +169,48 @@ describe("session_before_compact: per-model threshold", () => {
         "neuralwatt/GLM-5.1": { compactPercent: 80 },
       },
     });
-    const { pi, invoke } = createMockPi({
+    const { pi, ctx, emit } = createMockPi({
       id: "GLM-5.1",
       provider: "neuralwatt",
       contextWindow: 200000,
     });
     registerBeforeCompactHook(pi);
 
-    // 100k tokens < 160000 → below threshold
+    // 100k tokens < 160000 → below threshold, but proceeds
     const entries = [
       msg("m1", "user", "hello"),
       msg("m2", "assistant", "hi"),
       msg("m3", "user", "do work"),
       msg("m4", "assistant", "done"),
     ];
-    const result = invoke(makeEvent(entries, undefined, 100000));
-    expect(result).toEqual({ cancel: true });
+    const result = emit("session_before_compact", makeEvent(entries, undefined, 100000));
+    expect(result.cancel).toBeUndefined();
+    expect(result.compaction).toBeDefined();
   });
 
-  test("globalThreshold with compactPercent falls back from defaultThreshold", () => {
+  test("compaction proceeds with defaultThreshold", () => {
     setConfig({
       debug: false,
       overrideDefaultCompaction: true,
       defaultThreshold: { reserveTokens: 16384 },
     });
-    const { pi, invoke } = createMockPi({
+    const { pi, ctx, emit } = createMockPi({
       id: "some-model",
       provider: "some-provider",
       contextWindow: 128000,
     });
     registerBeforeCompactHook(pi);
 
-    // 50k tokens < 128k - 16384 = 111616 → below threshold
-    const entries = [
-      msg("m1", "user", "hello"),
-      msg("m2", "assistant", "hi"),
-    ];
-    const result = invoke(makeEvent(entries, undefined, 50000));
-    expect(result).toEqual({ cancel: true });
-  });
-
-  test("cancels when context is below defaultThreshold", () => {
-    setConfig({
-      debug: false,
-      overrideDefaultCompaction: true,
-      defaultThreshold: { reserveTokens: 16384 },
-    });
-    const { pi, invoke } = createMockPi({
-      id: "some-model",
-      provider: "some-provider",
-      contextWindow: 128000,
-    });
-    registerBeforeCompactHook(pi);
-
-    // 50k tokens < 128k - 16384 = 111616 → below threshold
+    // 50k tokens < 128k - 16384 = 111616 → below threshold, but proceeds
     const entries = [
       msg("m1", "user", "hello"),
       msg("m2", "assistant", "hi"),
       msg("m3", "user", "do work"),
       msg("m4", "assistant", "done"),
     ];
-    const result = invoke(makeEvent(entries, undefined, 50000));
-    expect(result).toEqual({ cancel: true });
+    const result = emit("session_before_compact", makeEvent(entries, undefined, 50000));
+    expect(result.cancel).toBeUndefined();
+    expect(result.compaction).toBeDefined();
   });
 
   test("does NOT cancel on /pi-vcc even when below threshold", () => {
@@ -258,51 +221,48 @@ describe("session_before_compact: per-model threshold", () => {
         "neuralwatt/GLM-5.1": { reserveTokens: 32768 },
       },
     });
-    const { pi, invoke } = createMockPi({
+    const { pi, ctx, emit } = createMockPi({
       id: "GLM-5.1",
       provider: "neuralwatt",
       contextWindow: 200000,
     });
     registerBeforeCompactHook(pi);
 
-    // Below threshold, but explicit /pi-vcc command — should NOT cancel
+    // Below threshold, but explicit /pi-vcc command
     const entries = [
       msg("m1", "user", "hello"),
       msg("m2", "assistant", "hi"),
       msg("m3", "user", "do work"),
       msg("m4", "assistant", "done"),
     ];
-    const result = invoke(makeEvent(entries, PI_VCC_COMPACT_INSTRUCTION, 100000));
-    // Not cancelled — explicit /pi-vcc bypasses threshold check
+    const result = emit("session_before_compact", makeEvent(entries, PI_VCC_COMPACT_INSTRUCTION, 100000));
     expect(result.cancel).toBeUndefined();
     expect(result.compaction).toBeDefined();
   });
 
-  test("does not cancel when no modelThresholds configured", () => {
+  test("compaction proceeds when no modelThresholds configured", () => {
     setConfig({
       debug: false,
       overrideDefaultCompaction: true,
     });
-    const { pi, invoke } = createMockPi({
+    const { pi, ctx, emit } = createMockPi({
       id: "GLM-5.1",
       provider: "neuralwatt",
       contextWindow: 200000,
     });
     registerBeforeCompactHook(pi);
 
-    // No modelThresholds → no threshold override → fall through to normal flow
     const entries = [
       msg("m1", "user", "hello"),
       msg("m2", "assistant", "hi"),
       msg("m3", "user", "do work"),
       msg("m4", "assistant", "done"),
     ];
-    const result = invoke(makeEvent(entries, undefined, 100000));
-    // Not cancelled by threshold check (may be cancelled by other logic)
+    const result = emit("session_before_compact", makeEvent(entries, undefined, 100000));
     expect(result.cancel === true).toBe(false);
   });
 
-  test("does not cancel when model is undefined", () => {
+  test("compaction proceeds when model is undefined", () => {
     setConfig({
       debug: false,
       overrideDefaultCompaction: true,
@@ -310,8 +270,7 @@ describe("session_before_compact: per-model threshold", () => {
         "GLM-5.1": { reserveTokens: 32768 },
       },
     });
-    // No model provided — ctx.model is undefined
-    const { pi, invoke } = createMockPi(undefined);
+    const { pi, ctx, emit } = createMockPi(undefined);
     registerBeforeCompactHook(pi);
 
     const entries = [
@@ -320,12 +279,11 @@ describe("session_before_compact: per-model threshold", () => {
       msg("m3", "user", "do work"),
       msg("m4", "assistant", "done"),
     ];
-    const result = invoke(makeEvent(entries, undefined, 100000));
-    // No model → can't check threshold → fall through to normal flow
+    const result = emit("session_before_compact", makeEvent(entries, undefined, 100000));
     expect(result.cancel === true).toBe(false);
   });
 
-  test("threshold check also applies when overrideDefaultCompaction is false", () => {
+  test("compaction proceeds with overrideDefaultCompaction false", () => {
     setConfig({
       debug: false,
       overrideDefaultCompaction: false,
@@ -333,45 +291,21 @@ describe("session_before_compact: per-model threshold", () => {
         "neuralwatt/GLM-5.1": { reserveTokens: 32768 },
       },
     });
-    const { pi, invoke } = createMockPi({
+    const { pi, ctx, emit } = createMockPi({
       id: "GLM-5.1",
       provider: "neuralwatt",
       contextWindow: 200000,
     });
     registerBeforeCompactHook(pi);
 
-    // Below threshold → cancel, even though pi-vcc wouldn't handle the summary
+    // Below threshold, overrideDefaultCompaction: false → pi-vcc doesn't
+    // handle the summary, but also doesn't cancel (threshold guard removed)
     const entries = [
       msg("m1", "user", "hello"),
       msg("m2", "assistant", "hi"),
     ];
-    const result = invoke(makeEvent(entries, undefined, 100000));
-    expect(result).toEqual({ cancel: true });
-  });
-
-  test("modelId-only key matches when provider/modelId does not", () => {
-    setConfig({
-      debug: false,
-      overrideDefaultCompaction: true,
-      modelThresholds: {
-        "GLM-5.1": { reserveTokens: 32768 },
-      },
-    });
-    const { pi, invoke } = createMockPi({
-      id: "GLM-5.1",
-      provider: "neuralwatt",
-      contextWindow: 200000,
-    });
-    registerBeforeCompactHook(pi);
-
-    // Should match on modelId-only key
-    const entries = [
-      msg("m1", "user", "hello"),
-      msg("m2", "assistant", "hi"),
-      msg("m3", "user", "do work"),
-      msg("m4", "assistant", "done"),
-    ];
-    const result = invoke(makeEvent(entries, undefined, 100000));
-    expect(result).toEqual({ cancel: true });
+    const result = emit("session_before_compact", makeEvent(entries, undefined, 100000));
+    // Not cancelled — returns undefined (pi-vcc doesn't handle it)
+    expect(result).toBeUndefined();
   });
 });

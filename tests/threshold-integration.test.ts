@@ -5,9 +5,10 @@
  * - When proactive trigger calls ctx.compact(), session_before_compact
  *   must NOT cancel the compaction even if tokensBefore differs from
  *   getContextUsage().
- * - When the global threshold triggers compaction but the model can
- *   handle more (per-model threshold not crossed), session_before_compact
- *   must cancel.
+ * - The per-model threshold guard was removed from session_before_compact
+ *   because the event carries no "reason" field — manual /compact and
+ *   auto-compaction are indistinguishable. The proactive trigger handles
+ *   the "compact earlier than pi-core" direction.
  */
 import { describe, test, expect, afterEach, beforeAll, afterAll } from "bun:test";
 import { existsSync, unlinkSync, writeFileSync, mkdtempSync, rmSync } from "fs";
@@ -100,11 +101,6 @@ describe("integration: proactive trigger + before-compact", () => {
   });
 
   test("proactive trigger then before-compact: does NOT cancel when proactiveTriggerActive", () => {
-    // Scenario: agent_end fires, getContextUsage says 110k tokens,
-    // per-model threshold is 95232 (128k - 32768). Proactive triggers compact.
-    // Then session_before_compact fires with tokensBefore = 94000
-    // (slightly different due to estimation).
-    // Without the proactiveTriggerActive guard, this would be cancelled.
     setConfig({
       debug: false,
       overrideDefaultCompaction: true,
@@ -119,13 +115,9 @@ describe("integration: proactive trigger + before-compact", () => {
     registerProactiveThresholdHook(pi);
     registerBeforeCompactHook(pi);
 
-    // Step 1: agent_end fires → proactive trigger calls ctx.compact()
     emit("agent_end", { type: "agent_end", messages: [] });
     expect(compactCalls).toHaveLength(1);
 
-    // Step 2: session_before_compact fires with tokensBefore = 94000
-    // (below the 95232 threshold — but we should NOT cancel because
-    // we ourselves triggered this compaction)
     const entries = [
       msg("m1", "user", "hello"),
       msg("m2", "assistant", "hi"),
@@ -136,14 +128,14 @@ describe("integration: proactive trigger + before-compact", () => {
 
     // Should NOT cancel — proactiveTriggerActive is true
     expect(result?.cancel).toBeUndefined();
-    // Should proceed with compaction (pi-vcc's own summary)
     expect(result?.compaction).toBeDefined();
   });
 
-  test("global trigger + before-compact: CANCELS when per-model threshold not crossed and no proactive trigger", () => {
-    // Scenario: pi-core's global threshold triggers compaction,
-    // but the model's per-model threshold hasn't been crossed.
-    // No proactive trigger was set — this is pi-core's own initiative.
+  test("global trigger + before-compact: compaction proceeds (threshold guard removed)", () => {
+    // Previously: pi-core's global threshold triggers compaction below the
+    // per-model threshold → cancelled. Now: the threshold guard is removed
+    // because manual /compact can't be distinguished from auto-compaction,
+    // so compaction proceeds.
     setConfig({
       debug: false,
       overrideDefaultCompaction: true,
@@ -151,24 +143,23 @@ describe("integration: proactive trigger + before-compact", () => {
         "neuralwatt/GLM-5.1": { reserveTokens: 32768 },
       },
     });
-    const { pi, ctx, emit, compactCalls } = createMockPi(
+    const { pi, ctx, emit } = createMockPi(
       { id: "GLM-5.1", provider: "neuralwatt", contextWindow: 128000 },
-      // getContextUsage says 80k — well below per-model threshold
       { tokens: 80000, contextWindow: 128000, percent: 63 },
     );
     registerProactiveThresholdHook(pi);
     registerBeforeCompactHook(pi);
 
-    // No agent_end fired (global threshold triggered this)
     const entries = [
       msg("m1", "user", "hello"),
       msg("m2", "assistant", "hi"),
       msg("m3", "user", "do work"),
       msg("m4", "assistant", "done"),
     ];
-    // tokensBefore = 90k < 95232 — should cancel
     const result = emit("session_before_compact", makeBeforeCompactEvent(entries, undefined, 90000));
-    expect(result).toEqual({ cancel: true });
+    // No longer cancelled — threshold guard removed
+    expect(result?.cancel).toBeUndefined();
+    expect(result?.compaction).toBeDefined();
   });
 
   test("proactiveTriggerActive is cleared after session_compact", () => {
@@ -186,16 +177,13 @@ describe("integration: proactive trigger + before-compact", () => {
     registerProactiveThresholdHook(pi);
     registerBeforeCompactHook(pi);
 
-    // Step 1: proactive trigger
     emit("agent_end", { type: "agent_end", messages: [] });
     expect(compactCalls).toHaveLength(1);
 
-    // Step 2: compaction completes
     emit("session_compact", { type: "session_compact", compactionEntry: {} });
 
-    // Step 3: now a subsequent session_before_compact (e.g., from pi-core
-    // also triggering) with tokensBelow below threshold — should CANCEL
-    // because proactiveTriggerActive was cleared by session_compact
+    // After session_compact, proactiveTriggerActive is cleared.
+    // But the threshold guard is also removed, so compaction proceeds.
     const entries = [
       msg("m1", "user", "hello"),
       msg("m2", "assistant", "hi"),
@@ -203,10 +191,11 @@ describe("integration: proactive trigger + before-compact", () => {
       msg("m4", "assistant", "done"),
     ];
     const result = emit("session_before_compact", makeBeforeCompactEvent(entries, undefined, 90000));
-    expect(result).toEqual({ cancel: true });
+    expect(result?.cancel).toBeUndefined();
+    expect(result?.compaction).toBeDefined();
   });
 
-  test("explicit /pi-vcc bypasses both the proactive flag AND threshold guard", () => {
+  test("explicit /pi-vcc proceeds regardless of context level", () => {
     setConfig({
       debug: false,
       overrideDefaultCompaction: true,
@@ -216,19 +205,18 @@ describe("integration: proactive trigger + before-compact", () => {
     });
     const { pi, ctx, emit } = createMockPi(
       { id: "GLM-5.1", provider: "neuralwatt", contextWindow: 128000 },
-      { tokens: 50000, contextWindow: 128000, percent: 39 },
+      { tokens: 5000, contextWindow: 128000, percent: 4 },
     );
     registerProactiveThresholdHook(pi);
     registerBeforeCompactHook(pi);
 
-    // Direct /pi-vcc with tokens well below threshold — should still proceed
     const entries = [
       msg("m1", "user", "hello"),
       msg("m2", "assistant", "hi"),
       msg("m3", "user", "do work"),
       msg("m4", "assistant", "done"),
     ];
-    const result = emit("session_before_compact", makeBeforeCompactEvent(entries, "__pi_vcc__", 50000));
+    const result = emit("session_before_compact", makeBeforeCompactEvent(entries, "__pi_vcc__", 5000));
     expect(result?.cancel).toBeUndefined();
     expect(result?.compaction).toBeDefined();
   });
@@ -241,10 +229,6 @@ describe("integration: proactive trigger + before-compact with overrideDefaultCo
   });
 
   test("proactive trigger fires, before-compact doesn't cancel, then pi-core handles summary", () => {
-    // When overrideDefaultCompaction: false, pi-vcc doesn't handle the summary
-    // for non-/pi-vcc compactions. But the threshold guard and proactive trigger
-    // should still work — the threshold guard controls WHEN compaction triggers,
-    // and pi-core handles the actual summary.
     setConfig({
       debug: false,
       overrideDefaultCompaction: false,
@@ -259,14 +243,9 @@ describe("integration: proactive trigger + before-compact with overrideDefaultCo
     registerProactiveThresholdHook(pi);
     registerBeforeCompactHook(pi);
 
-    // agent_end fires → proactive trigger
     emit("agent_end", { type: "agent_end", messages: [] });
     expect(compactCalls).toHaveLength(1);
 
-    // session_before_compact fires: threshold is crossed (tokensBefore = 110k
-    // > 95232), and our guard allows it because proactiveTriggerActive.
-    // Then overrideDefaultCompaction: false means pi-vcc returns undefined,
-    // letting pi-core handle the summary.
     const entries = [
       msg("m1", "user", "hello"),
       msg("m2", "assistant", "hi"),
@@ -275,11 +254,10 @@ describe("integration: proactive trigger + before-compact with overrideDefaultCo
     ];
     const result = emit("session_before_compact", makeBeforeCompactEvent(entries, undefined, 110000));
     // pi-vcc doesn't handle it (overrideDefaultCompaction: false) → returns undefined
-    // pi-core will handle the summary
     expect(result).toBeUndefined();
   });
 
-  test("threshold guard cancels even with overrideDefaultCompaction: false", () => {
+  test("compaction proceeds even with overrideDefaultCompaction: false (threshold guard removed)", () => {
     setConfig({
       debug: false,
       overrideDefaultCompaction: false,
@@ -294,15 +272,16 @@ describe("integration: proactive trigger + before-compact with overrideDefaultCo
     registerProactiveThresholdHook(pi);
     registerBeforeCompactHook(pi);
 
-    // No proactive trigger (context below threshold)
-    // Pi-core's global threshold triggers compaction, but per-model threshold
-    // says the model can handle more → cancel
+    // Previously this would cancel (threshold guard). Now: compaction
+    // proceeds (threshold guard removed).
     const entries = [
       msg("m1", "user", "hello"),
       msg("m2", "assistant", "hi"),
     ];
     const result = emit("session_before_compact", makeBeforeCompactEvent(entries, undefined, 80000));
-    expect(result).toEqual({ cancel: true });
+    // No longer cancelled — returns undefined (pi-vcc doesn't handle it,
+    // but doesn't block it either)
+    expect(result).toBeUndefined();
   });
 });
 
@@ -326,11 +305,9 @@ describe("integration: cooldown prevents double compaction", () => {
     );
     registerProactiveThresholdHook(pi);
 
-    // agent_end triggers compact and sets cooldown
     emit("agent_end", { type: "agent_end", messages: [] });
     expect(compactCalls).toHaveLength(1);
 
-    // model_select fires on same turn — blocked by cooldown
     emit("model_select", { type: "model_select" });
     expect(compactCalls).toHaveLength(1);
   });
@@ -352,7 +329,6 @@ describe("integration: cooldown prevents double compaction", () => {
     emit("agent_end", { type: "agent_end", messages: [] });
     expect(compactCalls).toHaveLength(1);
 
-    // No session_compact between — cooldown still active
     emit("agent_end", { type: "agent_end", messages: [] });
     expect(compactCalls).toHaveLength(1);
   });

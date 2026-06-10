@@ -1,8 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { writeFileSync } from "fs";
 import { compile, type CompileInput } from "../core/summarize";
-import { loadSettings, getModelThreshold, resolveReserveTokens, type PiVccSettings } from "../core/settings";
-import { isProactiveTriggerActive } from "./proactive-threshold";
+import { loadSettings, type PiVccSettings } from "../core/settings";
 import { triggerInvisibleContinue } from "../core/invisible-continue";
 import type { PiVccCompactionDetails } from "../details";
 
@@ -279,34 +278,23 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
     const { preparation, branchEntries, customInstructions } = event;
     const settings = loadSettings();
 
-    // Per-model threshold check — applies regardless of which compactor handles
-    // the actual summary. When pi-core's global threshold triggers compaction
-    // but the current model's per-model threshold hasn't been crossed yet,
-    // cancel to avoid compacting prematurely.
+    // Per-model threshold guard was previously applied here, cancelling
+    // compaction when context was below the per-model threshold. This
+    // blocked manual /compact from working because session_before_compact
+    // carries no "reason" field — manual and auto compactions are
+    // indistinguishable (both have customInstructions: undefined).
     //
-    // This is NOT applied to explicit /pi-vcc commands — if the user asked
-    // for a compaction, honor it.
+    // The per-model threshold is now served entirely by the proactive
+    // trigger (in proactive-threshold.ts), which fires on agent_end /
+    // model_select when the per-model threshold is crossed. This correctly
+    // compacts earlier than pi-core's global threshold without needing to
+    // cancel any compaction here.
+    //
+    // If pi-core's global threshold fires before the per-model threshold
+    // is crossed, the compaction proceeds — slightly premature from the
+    // per-model threshold's perspective, but this is preferable to blocking
+    // an explicit user action (/compact).
     const isPiVcc = customInstructions === PI_VCC_COMPACT_INSTRUCTION;
-    if (!isPiVcc && !isProactiveTriggerActive()) {
-      const threshold = getModelThreshold(settings, ctx.model);
-      if (threshold) {
-        const contextWindow = ctx.model?.contextWindow ?? 0;
-        const reserve = resolveReserveTokens(threshold, contextWindow);
-        if (reserve != null && contextWindow > 0) {
-          const effectiveThreshold = contextWindow - reserve;
-          if (preparation.tokensBefore <= effectiveThreshold) {
-            try {
-              const pct = Math.round((preparation.tokensBefore / contextWindow) * 100);
-              ctx?.ui?.notify?.(
-                `pi-vcc: Skipped compaction — ${pct}% of context window used (threshold: ${formatTokens(effectiveThreshold)} tok)`,
-                "info",
-              );
-            } catch {}
-            return { cancel: true };
-          }
-        }
-      }
-    }
 
     // Always handle explicit /pi-vcc marker.
     // Otherwise, only handle when user opted in via settings.
