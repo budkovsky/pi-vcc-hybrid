@@ -26,10 +26,12 @@ let _lastInvisibleContinueTime = 0;
 // Monkey-patch Agent.prototype.subscribe to capture the live instance.
 // Chain the previous patch (if pi-retry already patched it) so both
 // extensions can coexist.
-const _prevSubscribe = Agent.prototype.subscribe as (...args: unknown[]) => unknown;
-Agent.prototype.subscribe = function (this: Agent, ...args: unknown[]) {
+const _prevSubscribe = Agent.prototype.subscribe;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+Agent.prototype.subscribe = function (this: Agent, ...args: any[]) {
   _agent = this;
-  return _prevSubscribe.apply(this, args);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (_prevSubscribe as any).apply(this, args);
 };
 
 // Monkey-patch continue() so that after compaction, when the rebuilt
@@ -47,15 +49,15 @@ Agent.prototype.subscribe = function (this: Agent, ...args: unknown[]) {
 //
 // Chains the previous patch (pi-retry, pi-invisible-continue) so all
 // mutexes are respected.
-const _prevContinue = Agent.prototype.continue as (this: Agent) => Promise<unknown>;
-Agent.prototype.continue = function (this: Agent) {
+const _prevContinue = Agent.prototype.continue;
+Agent.prototype.continue = function (this: Agent): Promise<void> {
   const self = this;
   return (async () => {
     while (_continueInProgress) {
       await new Promise(r => setTimeout(r, 10));
     }
     try {
-      return await _prevContinue.call(self);
+      return await (_prevContinue as any).call(self);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
 
