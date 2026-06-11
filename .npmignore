@@ -1,0 +1,8 @@
+__tests__/
+tests/
+stress-debug.ts
+stress-degradation-curve.ts
+scripts/
+knip.json
+demo.gif
+.pi/
