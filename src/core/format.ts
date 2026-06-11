@@ -43,20 +43,15 @@ export const capBrief = (text: string): string => {
   // Find first section header to avoid cutting mid-section
   const firstHeader = kept.findIndex((l) => /^\[.+\]/.test(l));
   const clean = firstHeader > 0 ? kept.slice(firstHeader) : kept;
-  return `...(${omitted} earlier lines omitted)\n\n${clean.join("\n")}`;
+  const crumbLine = `...(${omitted} earlier lines omitted)`;
+  return `${crumbLine}\n\n${clean.join("\n")}`;
 };
 
-export const RECALL_NOTE =
-  "Use `vcc_recall` to search for prior work, decisions, and context from before this summary. " +
-  "Do not redo work already completed.";
-
-/**
- * Format the summary with cache-friendly section ordering.
+/** Format the summary with cache-friendly section ordering.
  *
  * Stable (merged/accumulated) sections come first so the prompt prefix
  * stays cacheable across compactions. Volatile (always-fresh) sections
- * come last.
- */
+ * come last. */
 export const formatSummary = (
   data: SectionData,
 ): string => {
@@ -66,14 +61,12 @@ export const formatSummary = (
     section("User Preferences", data.userPreferences),
     section("Files And Changes", data.filesAndChanges),
     section("Commits", data.commits),
-    section("Anchors", data.anchors),
   ].filter(Boolean);
 
   const volatileSections = [
     section("Type Catalog", data.typeCatalog),
     section("Outstanding Context", data.outstandingContext),
     section("Earlier Turns", data.turnSummaries),
-    section("Current Status", data.currentStatus),
   ].filter(Boolean);
 
   // All header sections (stable + volatile) form the header block
@@ -91,8 +84,5 @@ export const formatSummary = (
 
   let result = wrapLongLines(parts.join("\n\n---\n\n"));
 
-  // NOTE: RECALL_NOTE is intentionally NOT appended here.
-  // It is appended once by `compile()` at the very end, after merge-with-previous,
-  // to avoid the note compounding inside the brief transcript across compactions.
   return result;
 };

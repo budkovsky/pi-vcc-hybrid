@@ -224,34 +224,16 @@ const extractOutstandingContext = (blocks: NormalizedBlock[]): string[] => {
 
 const formatFileActivityFromUnified = (data: import("../extract/shared-symbols").UnifiedExtractResult): string[] => {
   const act = data.fileActivity;
-  const maxSymbolsPerFile = 4;
-
-  const cap = (set: Set<string>, limit: number) => {
-    const arr = [...set];
-    if (arr.length <= limit) return arr.join(", ");
-    return arr.slice(0, limit).join(", ") + ` (+${arr.length - limit} more)`;
-  };
-
   const formatCategory = (label: string, set: Set<string>): string | null => {
     if (set.size === 0) return null;
     const arr = [...set];
-    const annotated: string[] = [];
-
-    for (const p of arr.slice(0, 10)) {
-      const syms = act.symbols.get(p);
-      if (syms && syms.length > 0) {
-        const sigs = syms.slice(0, maxSymbolsPerFile).join(", ");
-        const suffix = syms.length > maxSymbolsPerFile ? `, +${syms.length - maxSymbolsPerFile} more` : "";
-        annotated.push(`${p} (${sigs}${suffix})`);
-      } else {
-        annotated.push(p);
-      }
-    }
+    const kept = arr.slice(0, 10);
 
     if (arr.length > 10) {
-      return `${label}: ${annotated.join(", ")} (+${arr.length - 10} more)`;
+      const omitted = arr.slice(10);
+      return `${label}: ${kept.join(", ")}, +recall: ${omitted.join(", ")}`;
     }
-    return `${label}: ${annotated.join(", ")}`;
+    return `${label}: ${kept.join(", ")}`;
   };
 
   const lines: string[] = [];
@@ -271,118 +253,22 @@ const formatTypeCatalogFromUnified = (data: import("../extract/shared-symbols").
   let totalSigs = 0;
   const MAX_TOTAL_SIGS = 30;
 
-  for (const entry of catalog) {
+  const omittedFiles: string[] = [];
+  for (let i = 0; i < catalog.length; i++) {
+    const entry = catalog[i];
     if (totalSigs >= MAX_TOTAL_SIGS) {
-      lines.push("(more signatures omitted)");
-      break;
+      omittedFiles.push(entry.file);
+      continue;
     }
-    const tag = entry.modified ? "[modified]" : "[read]";
-    lines.push(`${entry.file} ${tag}:`);
+    lines.push(`${entry.file}:`);
     for (const sig of entry.signatures) {
       if (totalSigs >= MAX_TOTAL_SIGS) break;
       lines.push(`  ${sig}`);
       totalSigs++;
     }
   }
-
-  return lines;
-};
-
-// User messages that are purely confirmatory — skip these for "Working on"
-const CONFIRMATORY_USER_RE =
-  /^(ok|okay|yes|yeah|yep|sure|great|thanks|thx|nice|looks? good|works?|perfect|done|thanks!*|got it|i see|lgtm|awesome)\b/i;
-
-/**
- * Extract current working status from the tail of the conversation.
- * Returns up to 3 lines: current focus, last action, next steps.
- */
-const extractCurrentStatus = (blocks: NormalizedBlock[]): string[] => {
-  const items: string[] = [];
-  const tail = blocks.slice(-20);
-
-  // 1. Current focus: last substantive (non-confirmatory) user message
-  for (let i = tail.length - 1; i >= 0; i--) {
-    const b = tail[i];
-    if (b.kind !== "user") continue;
-    const text = b.text.trim();
-    if (text.length < 10 || CONFIRMATORY_USER_RE.test(text)) continue;
-    items.push(`Working on: ${clip(text, 120)}`);
-    break;
-  }
-
-  // 2. Last action: last tool call that modified/read a file
-  for (let i = tail.length - 1; i >= 0; i--) {
-    const b = tail[i];
-    if (b.kind === "tool_call") {
-      const path = extractPath(b.args);
-      if (path) {
-        const cmd = b.name.length > 80 ? `${b.name.slice(0, 77)}...` : b.name;
-        items.push(`Last action: ${cmd} "${clip(path, 80)}"`);
-        break;
-      }
-    }
-  }
-
-  // 3. Next steps: last agent text that mentions what to do next
-  for (let i = tail.length - 1; i >= 0; i--) {
-    const b = tail[i];
-    if (b.kind === "assistant" && b.text.trim().length > 20) {
-      const nextMatch = b.text.match(/(?:next|remaining|todo|still need|what.*left|following)/i);
-      if (nextMatch) {
-        items.push(`Next: ${clip(b.text.trim(), 120)}`);
-        break;
-      }
-    }
-  }
-
-  return items.slice(0, 3);
-};
-
-/**
- * Extract structured reference anchors from already-built section data.
- * These let the model self-serve common lookups without calling vcc_recall.
- */
-const extractAnchors = (data: SectionData): string[] => {
-  const lines: string[] = [];
-
-  // Commit hashes
-  const commitHashes: string[] = [];
-  for (const line of data.commits) {
-    const hashMatch = line.match(/^-\s*([a-f0-9]{7,40}):/);
-    if (hashMatch) commitHashes.push(hashMatch[1]);
-  }
-  if (commitHashes.length > 0) {
-    lines.push(`commits: ${commitHashes.join(", ")}`);
-  }
-
-  // Error IDs from outstanding context
-  const errorIds: string[] = [];
-  for (const line of data.outstandingContext) {
-    const tscMatch = line.match(/TS(\d{4,5})/);
-    if (tscMatch) errorIds.push(`TS${tscMatch[1]}`);
-  }
-  if (errorIds.length > 0) {
-    lines.push(`errors: ${[...new Set(errorIds)].join(", ")}`);
-  }
-
-  // Key file paths from Files And Changes
-  const filePaths: string[] = [];
-  for (const line of data.filesAndChanges) {
-    const categoryMatch = line.match(/^-\s*(?:Modified|Created|Read):\s*(.*)/);
-    if (!categoryMatch) continue;
-    const pathPart = categoryMatch[1]
-      .replace(/\s*\([^)]*\)/g, "")
-      .replace(/\s*\(\+\d+ more\)\s*$/, "");
-    for (const p of pathPart.split(",")) {
-      const trimmed = p.trim();
-      if (trimmed) filePaths.push(trimmed);
-    }
-  }
-  if (filePaths.length > 0) {
-    const display = filePaths.length <= 15
-      ? filePaths.join(", ")
-      : `${filePaths.slice(0, 12).join(", ")} (+${filePaths.length - 12} more)`;
-    lines.push(`files: ${display}`);
+  if (omittedFiles.length > 0) {
+    lines.push(`(${omittedFiles.length} more files with signatures omitted)`);
   }
 
   return lines;
@@ -417,15 +303,10 @@ export const buildSections = (input: BuildSectionsInput): SectionData => {
     userPreferences,
     typeCatalog: formatTypeCatalogFromUnified(fileAndSymbols),
     symbolChanges: fileAndSymbols.symbolChanges,
-    currentStatus: extractCurrentStatus(blocks),
     turnSummaries,
-    anchors: [],  // populated after initial section data is built
     briefTranscript: stringifyBrief(briefSections),
     transcriptEntries: sectionsToTranscript(briefSections),
   };
-
-  // Anchors depend on other sections, so extract after building them
-  result.anchors = extractAnchors(result);
 
   return result;
 };

@@ -114,8 +114,8 @@ describe("outstanding context: deep error extraction", () => {
   });
 });
 
-describe("files and changes: symbol annotations", () => {
-  it("annotates modified files with exported symbol names from Edit newText", () => {
+describe("files and changes: no symbol annotations (moved to Type Catalog)", () => {
+  it("lists modified files without symbol annotations", () => {
     const blocks: NormalizedBlock[] = [
       { kind: "tool_call", name: "Edit", args: { file_path: "auth.ts", newText: "export function login() {}\nexport function verifyToken() {}\nconst _internal = 1;" } },
       { kind: "tool_result", name: "Edit", text: "ok", isError: false },
@@ -123,11 +123,15 @@ describe("files and changes: symbol annotations", () => {
     const r = buildSections({ blocks });
     expect(r.filesAndChanges.length).toBeGreaterThan(0);
     expect(r.filesAndChanges[0]).toContain("Modified");
-    expect(r.filesAndChanges[0]).toContain("login");
-    expect(r.filesAndChanges[0]).toContain("verifyToken");
+    expect(r.filesAndChanges[0]).toContain("auth.ts");
+    // Symbol annotations removed from Files And Changes (redundant with Type Catalog)
+    expect(r.filesAndChanges[0]).not.toContain("(");
+    // Symbols should appear in the Type Catalog instead
+    expect(r.typeCatalog.some(l => l.includes("login"))).toBe(true);
+    expect(r.typeCatalog.some(l => l.includes("verifyToken"))).toBe(true);
   });
 
-  it("annotates read files with exported symbol names from Read result", () => {
+  it("lists read files without symbol annotations", () => {
     const blocks: NormalizedBlock[] = [
       { kind: "tool_call", name: "Read", args: { file_path: "types.ts" } },
       { kind: "tool_result", name: "Read", text: "export interface User { name: string; }\nexport type AuthPayload = { email: string; }", isError: false },
@@ -135,11 +139,14 @@ describe("files and changes: symbol annotations", () => {
     const r = buildSections({ blocks });
     expect(r.filesAndChanges.length).toBeGreaterThan(0);
     expect(r.filesAndChanges[0]).toContain("Read");
-    expect(r.filesAndChanges[0]).toContain("User");
-    expect(r.filesAndChanges[0]).toContain("AuthPayload");
+    expect(r.filesAndChanges[0]).toContain("types.ts");
+    // Symbol annotations removed (redundant with Type Catalog)
+    expect(r.filesAndChanges[0]).not.toContain("(");
+    // Symbols should appear in the Type Catalog instead
+    expect(r.typeCatalog.some(l => l.includes("interface User"))).toBe(true);
   });
 
-  it("does not annotate files when no symbols are found", () => {
+  it("lists files without annotations when no symbols are found", () => {
     const blocks: NormalizedBlock[] = [
       { kind: "tool_call", name: "Read", args: { file_path: "config.json" } },
       { kind: "tool_result", name: "Read", text: '{ "name": "test" }', isError: false },
@@ -149,7 +156,7 @@ describe("files and changes: symbol annotations", () => {
     expect(r.filesAndChanges[0]).not.toContain("(");
   });
 
-  it("handles Mixed Edit+Read with combined symbols", () => {
+  it("handles Mixed Edit+Read: Modified takes priority", () => {
     const blocks: NormalizedBlock[] = [
       { kind: "tool_call", name: "Read", args: { file_path: "utils.ts" } },
       { kind: "tool_result", name: "Read", text: "export function helper() {}\nexport class Util {}", isError: false },
@@ -159,29 +166,32 @@ describe("files and changes: symbol annotations", () => {
     const r = buildSections({ blocks });
     expect(r.filesAndChanges[0]).toContain("Modified");
     expect(r.filesAndChanges[0]).toContain("utils.ts");
-    // Should contain symbols from both Read result and Edit newText
-    expect(r.filesAndChanges[0]).toContain("newHelper");
+    // Full signatures in Type Catalog, not in Files And Changes
+    expect(r.typeCatalog.some(l => l.includes("newHelper"))).toBe(true);
   });
 
-  it("annotates Python def and class exports", () => {
+  it("Python def and class exports appear in Type Catalog only", () => {
     const blocks: NormalizedBlock[] = [
       { kind: "tool_call", name: "Read", args: { file_path: "auth.py" } },
       { kind: "tool_result", name: "Read", text: "def login(email, pwd):\n    pass\n\nclass AuthProvider:\n    pass", isError: false },
     ];
     const r = buildSections({ blocks });
-    expect(r.filesAndChanges[0]).toContain("login");
-    expect(r.filesAndChanges[0]).toContain("AuthProvider");
+    expect(r.filesAndChanges[0]).toContain("auth.py");
+    expect(r.filesAndChanges[0]).not.toContain("(");
+    expect(r.typeCatalog.some(l => l.includes("login"))).toBe(true);
+    expect(r.typeCatalog.some(l => l.includes("AuthProvider"))).toBe(true);
   });
 
-  it("annotates Go exported functions", () => {
+  it("Go exported functions appear in Type Catalog only", () => {
     const blocks: NormalizedBlock[] = [
       { kind: "tool_call", name: "Read", args: { file_path: "handler.go" } },
       { kind: "tool_result", name: "Read", text: "func HandleRequest(w http.ResponseWriter, r *http.Request) {\n\t// ...\n}\n\nfunc internalHelper() {}", isError: false },
     ];
     const r = buildSections({ blocks });
-    expect(r.filesAndChanges[0]).toContain("HandleRequest");
+    expect(r.filesAndChanges[0]).toContain("handler.go");
+    expect(r.typeCatalog.some(l => l.includes("HandleRequest"))).toBe(true);
     // unexported Go functions (lowercase) should not be included
-    expect(r.filesAndChanges[0]).not.toContain("internalHelper");
+    expect(r.typeCatalog.every(l => !l.includes("internalHelper"))).toBe(true);
   });
 });
 
@@ -219,7 +229,6 @@ describe("type catalog", () => {
     expect(r.typeCatalog.length).toBeGreaterThan(0);
     // Modified file should appear first
     expect(r.typeCatalog[0]).toContain("modified.ts");
-    expect(r.typeCatalog[0]).toContain("[modified]");
   });
 
   it("returns empty for files with no exportable signatures", () => {
@@ -304,7 +313,7 @@ describe("format output integration", () => {
 
   it("Type Catalog is volatile (fresh only) on merge", () => {
     const { compile } = require("../src/core/summarize");
-    const prev = "[Session Goal]\n- goal\n\n[Type Catalog]\n- old-file.ts [read]:\n  export function old()";
+    const prev = "[Session Goal]\n- goal\n\n[Type Catalog]\n- old-file.ts:\n  export function old()";
     const fresh = compile({ messages: [], previousSummary: prev });
     // Type Catalog should be fresh-only, not merged from previous
     expect(fresh).not.toContain("old-file.ts");
