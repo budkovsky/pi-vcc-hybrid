@@ -409,19 +409,86 @@ const shortenPath = (p: string): string => {
   return parts.length > 2 ? parts.slice(-2).join("/") : p;
 };
 
+// ── causal extraction ──
+// Patterns that signal the model is explaining WHY something needs to change
+// or WHAT it decided to do. These are deterministic regex matches — no LLM.
+const CAUSE_PATTERNS = [
+  /(?:the\s+)?(?:issue|problem|bug|cause|reason|root\s+cause)\s+(?:is|was|seems\s+to\s+be)[:\s]+([^.,;!?]+?)(?:[.,;!?]|$)/i,
+  /(?:because|since|as)\s+([^.,;!?]+?)(?:[.,;!?]|$)/i,
+  /(?:fails?|crash(?:es)?|breaks?)\s+(?:because|due\s+to|when)\s+([^.,;!?]+?)(?:[.,;!?]|$)/i,
+  /(?:missing|lacking|absence\s+of)\s+([^.,;!?]+?)(?:[.,;!?]|$)/i,
+  /(?:can'?t|cannot)\s+([^.,;!?]+?)(?:[.,;!?]|$)/i,
+  /(?:not\s+\w+\s+to|not\s+returned|not\s+validated|not\s+properly)\s+([^.,;!?]+?)(?:[.,;!?]|$)/i,
+  // Subject-verb-object pattern for problem statements:
+  // "X double-refresh the token" / "X uses outdated Y" / "X rejects Y"
+  /^(\S+(?:\s+\S+){0,3})\s+(?:double-|over-|re-)?(?:refresh|write|read|call|use|uses|used|reject|accept|scattered|mixed|swallowed|expired|causing)\b/i,
+];
+
+const RESOLUTION_PATTERNS = [
+  /(?:fix|resolve|address|handle)\s+(?:this|it|the\s+\w+)\s+(?:by|with|through)\s+(?:adding|creating|implementing|introducing|applying|inserting|using|swapping|migrating|isolating|splitting|extracting)\s+([^.,;!?]+?)(?:[.,;!?]|$)/i,
+  /(?:added|created|implemented|introduced|applied|inserted)\s+([^.,;!?]+?)(?:[.,;!?]|$)/i,
+  /(?:changed|updated|modified|replaced|switched|migrated|refactored|extracted)\s+(?:to\s+)?([^.,;!?]+?)(?:[.,;!?]|$)/i,
+  /(?:set\s+up|configured|enabled)\s+([^.,;!?]+?)(?:[.,;!?]|$)/i,
+  /(?:swapping|swapped|isolating|isolated|splitting|split)\s+([^.,;!?]+?)(?:[.,;!?]|$)/i,
+];
+
+// Maximum chars for a causal breadcrumb fragment — keeps the ...recall line bounded.
+const CAUSAL_BREADCRUMB_MAX = 40;
+
+/**
+ * Extract a causal fragment from assistant text.
+ * Returns { cause, resolution } where each is a short string or null.
+ * Deterministic: same text always produces the same result.
+ */
+export const extractCausalChain = (
+  text: string,
+): { cause: string | null; resolution: string | null } => {
+  let cause: string | null = null;
+  let resolution: string | null = null;
+
+  for (const re of CAUSE_PATTERNS) {
+    const m = text.match(re);
+    if (m && m[1] && m[1].trim().length > 3) {
+      cause = clip(m[1].trim(), CAUSAL_BREADCRUMB_MAX);
+      break;
+    }
+  }
+
+  for (const re of RESOLUTION_PATTERNS) {
+    const m = text.match(re);
+    if (m && m[1] && m[1].trim().length > 3) {
+      resolution = clip(m[1].trim(), CAUSAL_BREADCRUMB_MAX);
+      break;
+    }
+  }
+
+  return { cause, resolution };
+};
+
 /**
  * Synthesize a one-line summary for a conversational turn.
  * No LLM — purely algorithmic compression.
+ *
+ * V2: includes causal information when available (cause → resolution → actions).
+ * Falls back to V1 format when no causal chain is found.
  */
 const synthesizeTurnSummary = (
   userText: string | null,
   toolActions: string[],
+  causalChain: { cause: string | null; resolution: string | null } = { cause: null, resolution: null },
 ): string => {
   const parts: string[] = [];
 
   // What was asked (truncated aggressively for HCA zone)
   if (userText && userText.length > 3) {
     parts.push(clip(userText, 50));
+  }
+
+  // Causal chain: cause → resolution (before actions)
+  const hasCausal = causalChain.cause || causalChain.resolution;
+  if (hasCausal) {
+    if (causalChain.cause) parts.push(causalChain.cause);
+    if (causalChain.resolution) parts.push(causalChain.resolution);
   }
 
   // Key actions — dedup and cap
@@ -443,25 +510,65 @@ const synthesizeTurnSummary = (
 };
 
 /**
+ * Build a causal breadcrumb for a turn summary line.
+ * Format: "file|resolution-key" instead of just "file" or keywords.
+ *
+ * Deterministic: same input always produces the same breadcrumb.
+ * Idempotent: the breadcrumb is a pure function of the line text and causal chain.
+ */
+const buildCausalBreadcrumb = (
+  turnSummary: string,
+  causalChain: { cause: string | null; resolution: string | null },
+): string => {
+  // Extract file from action part (after →)
+  const fileMatch = turnSummary.match(/(?:edited |read |wrote |created |deleted )?([^\s→.]+\.\w{1,12})/);
+  const file = fileMatch ? shortenPath(fileMatch[1]) : null;
+
+  // Build resolution key from causal chain
+  const resolutionKey = causalChain.resolution
+    ? causalChain.resolution.split(/\s+/).filter(w => w.length > 3).slice(0, 2).join("-")
+    : null;
+
+  if (file && resolutionKey) return `${file}|${resolutionKey}`;
+  if (resolutionKey) return resolutionKey;
+  // Fallback: V1 breadcrumb logic
+  const beforeArrow = turnSummary.split("\u2192")[0].trim();
+  const words = beforeArrow.split(/\s+/).filter(w => w.length > 2).slice(0, 3);
+  if (words.length > 0) return words.join(" ");
+  if (file) return file;
+  return "";
+};
+
+/**
  * Identify conversational turns and produce one-liner summaries.
  *
  * Each turn starts at a user/bash block and continues through assistant
  * responses, tool calls, and tool results until the next user/bash block.
  * This is the HCA zone — the heaviest compression layer that covers turns
  * that would otherwise fall off the brief transcript's capBrief cutoff.
+ *
+ * V2: extracts causal chains from assistant text and includes them in
+ * turn summaries. Causal breadcrumbs are emitted for the ...recall system.
  */
 export const identifyTurns = (blocks: NormalizedBlock[]): TurnInfo[] => {
   const turns: TurnInfo[] = [];
   let currentUserText: string | null = null;
   const toolActions: string[] = [];
+  const assistantTexts: string[] = [];
 
   const flush = () => {
     if (currentUserText === null && toolActions.length === 0) return;
+
+    // Extract causal chain from collected assistant text in this turn
+    const combinedAssistant = assistantTexts.join(" ");
+    const causalChain = extractCausalChain(combinedAssistant);
+
     turns.push({
-      summary: synthesizeTurnSummary(currentUserText, toolActions),
+      summary: synthesizeTurnSummary(currentUserText, toolActions, causalChain),
     });
     currentUserText = null;
     toolActions.length = 0;
+    assistantTexts.length = 0;
   };
 
   for (const b of blocks) {
@@ -471,6 +578,12 @@ export const identifyTurns = (blocks: NormalizedBlock[]): TurnInfo[] => {
         ? truncateTokens(collapseSkillText(b.text), 12)
         : `$ ${compressBash(b.command)}`;
       continue;
+    }
+    if (b.kind === "assistant") {
+      // Collect assistant text for causal extraction
+      if (b.text && b.text.trim().length > 0) {
+        assistantTexts.push(b.text.trim());
+      }
     }
     if (b.kind === "tool_call") {
       if (!b.name || b.name.trim() === "") continue;

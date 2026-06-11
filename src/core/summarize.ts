@@ -65,9 +65,66 @@ const briefOf = (text: string): string => {
 const extractBreadcrumb = (line: string): string => {
   const text = line.replace(/^\s*-\s*/, "").trim();
   if (!text) return "";
-  // "edited auth.ts" → "auth.ts"
-  const fileMatch = text.match(/(?:edited |read |wrote |created |deleted )?(\S+\.\w{1,12})/);
-  if (fileMatch) return fileMatch[1];
+
+  // V1: ...recall: breadcrumb — preserve as-is (they already carry causal keys)
+  if (text.startsWith("...recall:")) return text.slice("...recall:".length).trim();
+
+  // V2: causal breadcrumb from turn summary (contains →)
+  // Format: "goal → cause_fragment → resolution_fragment → tool_actions"
+  // The cause/resolution fragments are produced by extractCausalChain and
+  // are typically short phrases without a leading verb.
+  if (text.includes("\u2192")) {
+    const parts = text.split("\u2192").map(p => p.trim());
+
+    // Extract file from the action parts
+    const fileMatch = text.match(/(?:edited |read |wrote |created |deleted )?([^\s.]+\.\w{1,12})/);
+    const file = fileMatch ? fileMatch[1] : null;
+
+    // Identify structural parts: goal is first, tool actions are at the end
+    // (start with read/edited/ran or contain file paths).
+    // Middle parts are causal fragments.
+    const toolActionRe = /^(?:read|edited|wrote|created|deleted|ran)\s?/i;
+    const toolActionIdx = parts.findIndex(p => toolActionRe.test(p) || /\+\d+ more/.test(p));
+
+    // Causal parts are between goal (index 0) and tool actions
+    const causalEnd = toolActionIdx >= 0 ? toolActionIdx : parts.length;
+    const causalParts = parts.slice(1, causalEnd); // skip goal at index 0
+
+    // The last causal part before tool actions is the resolution fragment
+    // (from extractCausalChain). The one before that is the cause fragment.
+    const causePart = causalParts.length >= 2 ? causalParts[0] : null;
+    const resolutionPart = causalParts.length >= 1 ? causalParts[causalParts.length - 1] : null;
+
+    // Build breadcrumb: file|resolution-key
+    // Resolution key: 2 longest content words from the resolution fragment
+    if (resolutionPart) {
+      const resKey = resolutionPart
+        .split(/\s+/)
+        .filter(w => w.length > 3 && !/^(with|from|into|over|under|before|after|during|through|between|using|which|where|when|that|this|those|these|their|been|being|have|has|had|will|would|could|should)$/i.test(w))
+        .slice(0, 2)
+        .join("-");
+      if (file && resKey) return `${file}|${resKey}`;
+      if (resKey) return resKey;
+    }
+
+    // Cause key fallback
+    if (causePart) {
+      const causeKey = causePart
+        .split(/\s+/)
+        .filter(w => w.length > 3 && !/^(with|from|into|over|under|before|after|during|through|between|using|which|where|when|that|this|those|these|their|been|being|have|has|had|will|would|could|should)$/i.test(w))
+        .slice(0, 2)
+        .join("-");
+      if (file && causeKey) return `${file}|${causeKey}`;
+      if (causeKey) return causeKey;
+    }
+
+    // Final fallback for → lines: just the file
+    if (file) return file;
+  }
+
+  // V1 fallback: "edited auth.ts" → "auth.ts"
+  const fileMatch1 = text.match(/(?:edited |read |wrote |created |deleted )?(\S+\.\w{1,12})/);
+  if (fileMatch1) return fileMatch1[1];
   // "Fix login bug → ..." → first few words before →
   const beforeArrow = text.split("\u2192")[0].trim();
   const words = beforeArrow.split(/\s+/).filter(w => w.length > 2).slice(0, 3);
