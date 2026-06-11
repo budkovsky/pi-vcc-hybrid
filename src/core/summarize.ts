@@ -4,6 +4,7 @@ import { normalize } from "./normalize";
 import { filterNoise } from "./filter-noise";
 import { buildSections } from "./build-sections";
 import { formatSummary, capBrief, wrapLongLines } from "./format";
+import { refineBreadcrumbKey } from "./causal-keys";
 
 export interface CompileInput {
   messages: Message[];
@@ -96,24 +97,16 @@ const extractBreadcrumb = (line: string): string => {
     const resolutionPart = causalParts.length >= 1 ? causalParts[causalParts.length - 1] : null;
 
     // Build breadcrumb: file|resolution-key
-    // Resolution key: 2 longest content words from the resolution fragment
+    // Resolution key: content words from the resolution fragment, refined by shared key filter
     if (resolutionPart) {
-      const resKey = resolutionPart
-        .split(/\s+/)
-        .filter(w => w.length > 3 && !/^(with|from|into|over|under|before|after|during|through|between|using|which|where|when|that|this|those|these|their|been|being|have|has|had|will|would|could|should)$/i.test(w))
-        .slice(0, 2)
-        .join("-");
+      const resKey = refineBreadcrumbKey(resolutionPart);
       if (file && resKey) return `${file}|${resKey}`;
       if (resKey) return resKey;
     }
 
     // Cause key fallback
     if (causePart) {
-      const causeKey = causePart
-        .split(/\s+/)
-        .filter(w => w.length > 3 && !/^(with|from|into|over|under|before|after|during|through|between|using|which|where|when|that|this|those|these|their|been|being|have|has|had|will|would|could|should)$/i.test(w))
-        .slice(0, 2)
-        .join("-");
+      const causeKey = refineBreadcrumbKey(causePart);
       if (file && causeKey) return `${file}|${causeKey}`;
       if (causeKey) return causeKey;
     }

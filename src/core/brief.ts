@@ -2,6 +2,7 @@ import type { NormalizedBlock } from "../types";
 import { clip, firstLine } from "./content";
 import { extractPath } from "./tool-args";
 import { collapseSkillText } from "./skill-collapse";
+import { KEY_STOPS, refineBreadcrumbKey } from "./causal-keys";
 
 const TRUNCATE_USER = 256;
 const TRUNCATE_ASSISTANT = 200;
@@ -410,59 +411,189 @@ const shortenPath = (p: string): string => {
 };
 
 // ── causal extraction ──
-// Patterns that signal the model is explaining WHY something needs to change
-// or WHAT it decided to do. These are deterministic regex matches — no LLM.
-const CAUSE_PATTERNS = [
-  /(?:the\s+)?(?:issue|problem|bug|cause|reason|root\s+cause)\s+(?:is|was|seems\s+to\s+be)[:\s]+([^.,;!?]+?)(?:[.,;!?]|$)/i,
-  /(?:because|since|as)\s+([^.,;!?]+?)(?:[.,;!?]|$)/i,
-  /(?:fails?|crash(?:es)?|breaks?)\s+(?:because|due\s+to|when)\s+([^.,;!?]+?)(?:[.,;!?]|$)/i,
-  /(?:missing|lacking|absence\s+of)\s+([^.,;!?]+?)(?:[.,;!?]|$)/i,
-  /(?:can'?t|cannot)\s+([^.,;!?]+?)(?:[.,;!?]|$)/i,
-  /(?:not\s+\w+\s+to|not\s+returned|not\s+validated|not\s+properly)\s+([^.,;!?]+?)(?:[.,;!?]|$)/i,
-  // Subject-verb-object pattern for problem statements:
-  // "X double-refresh the token" / "X uses outdated Y" / "X rejects Y"
-  /^(\S+(?:\s+\S+){0,3})\s+(?:double-|over-|re-)?(?:refresh|write|read|call|use|uses|used|reject|accept|scattered|mixed|swallowed|expired|causing)\b/i,
+// Marker-based extraction: scan for specific phrases that signal cause or
+// resolution, then extract a bounded fragment after the marker.
+//
+// Why markers instead of regex patterns?
+// 1. No backtracking risk — indexOf + linear char scan is O(n) worst case.
+//    Regex with lazy quantifiers + alternation ([^.,;!?]+?)(?:[.,;!?]|$)
+//    can theoretically backtrack, though JS engines limit this in practice.
+// 2. Bounded by construction — FRAGMENT_MAX hard cap, no unbounded capture.
+// 3. Easy to extend — add a string to the list, no regex syntax to debug.
+// 4. Multi-sentence aware — tries full text first, then per-sentence.
+
+// Cause markers: phrases that signal "here comes the reason/problem".
+// Ordered from most specific to least specific; first match wins.
+const CAUSE_MARKERS: readonly string[] = [
+  "the issue is",
+  "the problem is",
+  "the problem was",
+  "the bug is",
+  "the bug was",
+  "the cause is",
+  "root cause:",
+  "root cause is",
+  "the reason is",
+  "fails because",
+  "fails when",
+  "fails due to",
+  "crashes because",
+  "crashes when",
+  "crashes due to",
+  "breaks because",
+  "breaks when",
+  "breaks due to",
+  "because ",
+  "since ",
+  "due to ",
+  "missing ",
+  "lacking ",
+  "lack of ",
+  "absence of ",
+  "can't ",
+  "cannot ",
+  "not properly ",
+  "not correctly ",
+  "not validating ",
+  "not returning ",
+  "not handling ",
+  "not releasing ",
+  "not checking ",
+  "wrong ",
+  "incorrect ",
+  "stale ",
+  "outdated ",
+  "unhandled ",
+  "uncaught ",
 ];
 
-const RESOLUTION_PATTERNS = [
-  /(?:fix|resolve|address|handle)\s+(?:this|it|the\s+\w+)\s+(?:by|with|through)\s+(?:adding|creating|implementing|introducing|applying|inserting|using|swapping|migrating|isolating|splitting|extracting)\s+([^.,;!?]+?)(?:[.,;!?]|$)/i,
-  /(?:added|created|implemented|introduced|applied|inserted)\s+([^.,;!?]+?)(?:[.,;!?]|$)/i,
-  /(?:changed|updated|modified|replaced|switched|migrated|refactored|extracted)\s+(?:to\s+)?([^.,;!?]+?)(?:[.,;!?]|$)/i,
-  /(?:set\s+up|configured|enabled)\s+([^.,;!?]+?)(?:[.,;!?]|$)/i,
-  /(?:swapping|swapped|isolating|isolated|splitting|split)\s+([^.,;!?]+?)(?:[.,;!?]|$)/i,
+// Resolution markers: phrases that signal "here comes the fix/action".
+// Ordered from most specific to least specific; first match wins.
+const RESOLUTION_MARKERS: readonly string[] = [
+  "fix this by",
+  "fix it by",
+  "resolve this by",
+  "resolve it by",
+  "resolve by",
+  "handle this by",
+  "handle by",
+  "address this by",
+  "address by",
+  "by adding",
+  "by creating",
+  "by implementing",
+  "by introducing",
+  "by applying",
+  "by inserting",
+  "by using",
+  "by swapping",
+  "by migrating",
+  "by isolating",
+  "by splitting",
+  "by extracting",
+  "by replacing",
+  "by refactoring",
+  "by wrapping",
+  "by moving",
+  "by removing",
+  "added ",
+  "created ",
+  "implemented ",
+  "introduced ",
+  "applied ",
+  "inserted ",
+  "changed to",
+  "updated to",
+  "switched to",
+  "migrated to",
+  "replaced with",
+  "replaced by",
+  "refactored to",
+  "extracted into",
+  "set up ",
+  "configured ",
+  "enabled ",
+  "swapped ",
+  "isolated ",
+  "splitting ",
+  "split ",
+  "wrapped ",
+  "guarded ",
+  "moved ",
+  "removed ",
 ];
 
-// Maximum chars for a causal breadcrumb fragment — keeps the ...recall line bounded.
+// Maximum chars for a causal fragment — hard cap prevents unbounded capture.
+const FRAGMENT_MAX = 60;
+// Maximum chars for a causal breadcrumb key — keeps the ...recall line bounded.
 const CAUSAL_BREADCRUMB_MAX = 40;
+
+// Characters that terminate a causal fragment.
+const SENTINEL_CHARS = new Set([...
+  ",.;!?\n"
+]);
+
+/**
+ * Extract a bounded fragment starting after the first matching marker.
+ * Stops at the first sentinel character or FRAGMENT_MAX chars, whichever
+ * comes first. O(n) single pass — indexOf + linear scan, no regex.
+ */
+const extractFragment = (
+  text: string,
+  markers: readonly string[],
+): string | null => {
+  const lower = text.toLowerCase();
+  for (const marker of markers) {
+    const idx = lower.indexOf(marker);
+    if (idx < 0) continue;
+    const start = idx + marker.length;
+    if (start >= text.length) continue;
+
+    let end = start;
+    while (end < text.length && end - start < FRAGMENT_MAX) {
+      if (SENTINEL_CHARS.has(text[end])) break;
+      end++;
+    }
+    const fragment = text.slice(start, end).trim();
+    if (fragment.length < 4) continue;
+    return fragment;
+  }
+  return null;
+};
 
 /**
  * Extract a causal fragment from assistant text.
  * Returns { cause, resolution } where each is a short string or null.
+ *
  * Deterministic: same text always produces the same result.
+ * O(n): indexOf + linear char scan per marker; no regex backtracking.
+ * Bounded: fragments are capped at CAUSAL_BREADCRUMB_MAX chars.
  */
 export const extractCausalChain = (
   text: string,
 ): { cause: string | null; resolution: string | null } => {
-  let cause: string | null = null;
-  let resolution: string | null = null;
+  // Try full text first (markers can span sentence boundaries)
+  let cause = extractFragment(text, CAUSE_MARKERS);
+  let resolution = extractFragment(text, RESOLUTION_MARKERS);
 
-  for (const re of CAUSE_PATTERNS) {
-    const m = text.match(re);
-    if (m && m[1] && m[1].trim().length > 3) {
-      cause = clip(m[1].trim(), CAUSAL_BREADCRUMB_MAX);
-      break;
+  // If we didn't find both, also try per-sentence (handles cases like
+  // "The issue is a race condition. I fixed it by adding a mutex."
+  // where cause and resolution are in different sentences but the
+  // resolution marker "it by" doesn't match because "it" is too far
+  // from the full text's start).
+  if (!cause || !resolution) {
+    const sentences = text.split(/[.!?]/).filter(s => s.trim().length > 3);
+    for (const sentence of sentences) {
+      if (!cause) cause = extractFragment(sentence, CAUSE_MARKERS);
+      if (!resolution) resolution = extractFragment(sentence, RESOLUTION_MARKERS);
+      if (cause && resolution) break;
     }
   }
 
-  for (const re of RESOLUTION_PATTERNS) {
-    const m = text.match(re);
-    if (m && m[1] && m[1].trim().length > 3) {
-      resolution = clip(m[1].trim(), CAUSAL_BREADCRUMB_MAX);
-      break;
-    }
-  }
-
-  return { cause, resolution };
+  return {
+    cause: cause ? clip(cause, CAUSAL_BREADCRUMB_MAX) : null,
+    resolution: resolution ? clip(resolution, CAUSAL_BREADCRUMB_MAX) : null,
+  };
 };
 
 /**
@@ -524,9 +655,9 @@ const buildCausalBreadcrumb = (
   const fileMatch = turnSummary.match(/(?:edited |read |wrote |created |deleted )?([^\s→.]+\.\w{1,12})/);
   const file = fileMatch ? shortenPath(fileMatch[1]) : null;
 
-  // Build resolution key from causal chain
+  // Build resolution key from causal chain using stop-word-aware refinement
   const resolutionKey = causalChain.resolution
-    ? causalChain.resolution.split(/\s+/).filter(w => w.length > 3).slice(0, 2).join("-")
+    ? refineBreadcrumbKey(causalChain.resolution)
     : null;
 
   if (file && resolutionKey) return `${file}|${resolutionKey}`;
