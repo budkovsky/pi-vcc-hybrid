@@ -3,7 +3,6 @@ dist/
 bun.lock
 *.tsbuildinfo
 .pi*
-docs/
 run_compare.ts
 .pi-mux-state.json
 research/
