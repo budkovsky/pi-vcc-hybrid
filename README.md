@@ -215,6 +215,12 @@ pi-vcc is one of four compaction approaches in the AI coding-agent ecosystem. He
 ## Install
 
 ```bash
+pi install npm:@monotykamary/pi-vcc
+```
+
+Or install from GitHub:
+
+```bash
 pi install https://github.com/monotykamary/pi-vcc@tom
 ```
 
