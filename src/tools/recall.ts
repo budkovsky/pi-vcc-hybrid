@@ -2,10 +2,12 @@ import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "fs";
 import { loadAllMessages } from "../core/load-messages";
-import { searchEntries } from "../core/search-entries";
+import { searchEntries, type SearchHit } from "../core/search-entries";
 import { formatRecallOutput } from "../core/format-recall";
 import { getActiveLineageEntryIds } from "../core/lineage";
 import { normalizeRecallScope } from "../core/recall-scope";
+import { renderMessage } from "../core/render-entries";
+import type { Message } from "@earendil-works/pi-ai";
 import type { PiVccCompactionDetails } from "../details";
 
 const DEFAULT_RECENT = 25;
@@ -87,13 +89,14 @@ export const registerRecallTool = (pi: ExtensionAPI) => {
     promptSnippet:
       "vcc_recall: Search history; default scope is active lineage. " +
       "Use scope:'all' for off-lineage branches. " +
-      "Use scope:'compaction:N' or scope:'compaction:latest' for targeted search within a compaction segment.",
+      "Use scope:'compaction:N' or scope:'compaction:latest' for targeted search within a compaction segment. " +
+      "expand:[indices] returns full content for those entries, composable with query to expand matched results.",
     parameters: Type.Object({
       query: Type.Optional(
         Type.String({ description: "Search terms or regex pattern (e.g. 'hook|inject', 'fail.*build'). Multi-word = OR ranked by relevance." }),
       ),
       expand: Type.Optional(
-        Type.Array(Type.Number(), { description: "Entry indices to return full untruncated content for" }),
+        Type.Array(Type.Number(), { description: "Entry indices to return full untruncated content for. Works alone (any index in scope) or alongside query (expands matching entries on the current page)." }),
       ),
       page: Type.Optional(
         Type.Number({ description: "Page number (1-based) for paginated search results. Default: 1." }),
@@ -177,15 +180,53 @@ export const registerRecallTool = (pi: ExtensionAPI) => {
           };
         }
         const start = (page - 1) * PAGE_SIZE;
-        const pageResults = allResults.slice(start, start + PAGE_SIZE);
+        const pageResults = allResults.slice(start, start + PAGE_SIZE) as SearchHit[];
         const header = totalPages > 1
           ? `Page ${page}/${totalPages} (${allResults.length} total matches${searchScopeLabel})`
           : `${allResults.length} matches${searchScopeLabel}`;
-        const footer = page < totalPages && page < MAX_PAGES
-          ? `\n--- Use page:${page + 1} for more results ---`
-          : totalPages > MAX_PAGES
-            ? `\n--- Results truncated at ${MAX_PAGES} pages. Use a more specific query or scope to narrow results. ---`
-            : "";
+
+        // Compose: when expand indices accompany a query, swap the truncated
+        // snippet for full untruncated content on any paged result whose
+        // index is in expandSet. rawMessages (loaded above with full=false)
+        // are parallel to `msgs`, so we re-render only the requested
+        // indices at full=true instead of re-reading the session file.
+        const expanded: number[] = [];
+        if (hasExpand) {
+          const msgByIndex = new Map<number, Message>();
+          for (let i = 0; i < msgs.length; i++) {
+            msgByIndex.set(msgs[i].index, rawMessages[i]);
+          }
+          for (const r of pageResults) {
+            if (!expandSet.has(r.index)) continue;
+            const raw = msgByIndex.get(r.index);
+            if (!raw) continue;
+            const full = renderMessage(raw, r.index, true);
+            // formatEntry prefers `snippet` for matched entries; set both
+            // so the full content renders regardless of match state.
+            r.snippet = full.summary;
+            r.summary = full.summary;
+            expanded.push(r.index);
+          }
+        }
+
+        const footerParts: string[] = [];
+        if (page < totalPages && page < MAX_PAGES) {
+          footerParts.push(`--- Use page:${page + 1} for more results ---`);
+        } else if (totalPages > MAX_PAGES) {
+          footerParts.push(`--- Results truncated at ${MAX_PAGES} pages. Use a more specific query or scope to narrow results. ---`);
+        }
+        if (hasExpand) {
+          const notExpanded = [...expandSet].filter((i) => !expanded.includes(i));
+          const noun = expanded.length === 1 ? "entry" : "entries";
+          if (expanded.length > 0 && notExpanded.length === 0) {
+            footerParts.push(`--- expanded ${expanded.length} ${noun} to full content ---`);
+          } else if (expanded.length > 0) {
+            footerParts.push(`--- expanded ${expanded.length} ${noun} to full content; not on this page: ${notExpanded.join(", ")} ---`);
+          } else if (notExpanded.length > 0) {
+            footerParts.push(`--- no expand indices on this page: ${notExpanded.join(", ")} ---`);
+          }
+        }
+        const footer = footerParts.length ? "\n" + footerParts.join("\n") : "";
         const output = formatRecallOutput(pageResults, params.query, header) + footer;
         return {
           content: [{ type: "text", text: output }],
