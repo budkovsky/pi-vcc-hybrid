@@ -40,6 +40,10 @@ Agent.prototype.subscribe = function (this: Agent, ...args: any[]) {
 // "Cannot continue from message role: assistant" and the agent loop
 // exits — leaving mid-task work unfinished.
 //
+// Note (pi 0.79+): Agent.continue() now drains queued steering/follow-up
+// messages before throwing, so this throw path only fires when there are
+// genuinely no queued messages — the prompt([]) fallback is still correct.
+//
 // The fix: when continue() would throw because the last message is an
 // assistant, fall back to prompt([]) instead. prompt([]) doesn't check
 // the last message role — it starts a fresh agent loop with the current

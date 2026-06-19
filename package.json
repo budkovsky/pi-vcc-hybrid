@@ -1,6 +1,6 @@
 {
   "name": "@monotykamary/pi-vcc",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Algorithmic conversation compactor for pi - transcript-preserving structured summaries, no LLM calls",
   "main": "index.ts",
   "keywords": [
@@ -15,9 +15,9 @@
     "url": "git+https://github.com/monotykamary/pi-vcc.git"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=0.74.0 <1.0.0",
-    "@earendil-works/pi-agent-core": ">=0.74.0 <1.0.0",
-    "@earendil-works/pi-coding-agent": ">=0.74.0 <1.0.0",
+    "@earendil-works/pi-ai": "^0.79.8",
+    "@earendil-works/pi-agent-core": "^0.79.8",
+    "@earendil-works/pi-coding-agent": "^0.79.8",
     "typebox": ">=1.1.24 <2.0.0"
   },
   "devDependencies": {
