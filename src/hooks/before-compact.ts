@@ -3,6 +3,7 @@ import { writeFileSync } from "fs";
 import { compile, type CompileInput } from "../core/summarize";
 import { loadSettings, type PiVccSettings } from "../core/settings";
 import { triggerInvisibleContinue } from "../core/invisible-continue";
+import { countPiVccCompactionsFromSession, ordinalSuffix } from "../core/compaction-count";
 import type { PiVccCompactionDetails } from "../details";
 
 export const PI_VCC_COMPACT_INSTRUCTION = "__pi_vcc__";
@@ -489,11 +490,15 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
     // /pi-vcc path uses its own onComplete callback in the command handler.
     if (!lastCompactWasPiVcc) {
       const stats = lastStats;
+      const { total, latestOrdinal } = countPiVccCompactionsFromSession(ctx?.sessionManager as any);
+      const compactionLabel = total > 0
+        ? ` (${latestOrdinal}${ordinalSuffix(latestOrdinal)} compaction; ${total} total)`
+        : "";
       if (stats) {
         setTimeout(() => {
           try {
             ctx?.ui?.notify?.(
-              `pi-vcc: ${stats.summarized} source entries processed; tail kept ${stats.kept} (~${formatTokens(stats.keptTokensEst)} tok).`,
+              `pi-vcc: ${stats.summarized} source entries processed; tail kept ${stats.kept} (~${formatTokens(stats.keptTokensEst)} tok).${compactionLabel}`,
               "info",
             );
           } catch {}
