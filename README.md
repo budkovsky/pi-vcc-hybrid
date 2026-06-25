@@ -199,7 +199,7 @@ pi-vcc is one of four compaction approaches in the AI coding-agent ecosystem. He
 - **Scoped recall** — default search is active lineage; use `scope:"all"` for all lineages, or `scope:"compaction:N"` / `scope:"compaction:latest"` to search within a specific compaction segment's original messages
 - **Priority error tags** — outstanding context items tagged `[ERROR]`, `[WARN]`, `[INFO]`, `[RESOLVED]` for urgency at a glance
 - **Metadata footer** — each compaction summary ends with timestamp, compression ratio, and message range
-- **Compaction counter** — the post-compaction notification reports the ordinal and total (e.g. `"3rd compaction; 3 total"`), counted from pi-vcc compaction entries in the session file so it lines up with `scope:"compaction:N"`
+- **Compaction counter** — the post-compaction notification reports the ordinal of the just-completed compaction (e.g. `"3rd compaction"`), counted from pi-vcc compaction entries in the session file so it lines up with `scope:"compaction:N"`
 - **Cache-friendly ordering** — stable sections (goal, preferences, files, commits, anchors) come first; volatile sections (outstanding context, earlier turns, current status) come last, maximizing prompt-cacheable prefix across compactions
 - **Adaptive recall view** — search results grouped by conversation segments (turns) with match indicators (`>`) and context preservation, so the agent sees the conversational structure around each match
 - **Regex search** — `vcc_recall` supports regex patterns (`hook|inject`, `fail.*build`) and OR-ranked multi-word queries

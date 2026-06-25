@@ -15,9 +15,9 @@ export const registerPiVccCommand = (pi: ExtensionAPI) => {
         customInstructions: PI_VCC_COMPACT_INSTRUCTION,
         onComplete: () => {
           const stats = getLastCompactionStats();
-          const { total, latestOrdinal } = countPiVccCompactionsFromSession(ctx.sessionManager);
-          const compactionLabel = total > 0
-            ? ` (${latestOrdinal}${ordinalSuffix(latestOrdinal)} compaction; ${total} total)`
+          const count = countPiVccCompactionsFromSession(ctx.sessionManager);
+          const compactionLabel = count > 0
+            ? ` (${count}${ordinalSuffix(count)} compaction)`
             : "";
           if (stats) {
             ctx.ui.notify(

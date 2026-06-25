@@ -4,7 +4,8 @@
  * Compaction entries are persisted to the session file as
  * `{ type: "compaction", details: { compactor: "pi-vcc", ... } }`.
  * `session_compact` fires after the new compaction entry has been appended,
- * so counting entries at that point includes the just-completed compaction.
+ * so counting entries at that point includes the just-completed compaction —
+ * meaning the count doubles as the 1-based ordinal of the latest one.
  *
  * `getEntries()` returns the full append-only session (all lineages), which
  * matches the `compaction:N` indexing scheme used by vcc_recall — so the
@@ -25,28 +26,22 @@ interface SessionManagerLike {
   getEntries?: () => any[];
 }
 
-interface CompactionCount {
-  /** Total pi-vcc compactions in the session (includes the just-completed one). */
-  total: number;
-  /** 1-based ordinal of the latest compaction (== total, or 0 when none). */
-  latestOrdinal: number;
-}
-
-export const countPiVccCompactions = (entries: any[]): CompactionCount => {
+/** Total pi-vcc compactions in the session (includes the just-completed one). */
+export const countPiVccCompactions = (entries: any[]): number => {
   let total = 0;
   for (const e of entries) {
     if (e?.type === "compaction" && e?.details?.compactor === "pi-vcc") total++;
   }
-  return { total, latestOrdinal: total };
+  return total;
 };
 
 export const countPiVccCompactionsFromSession = (
   sessionManager: SessionManagerLike | undefined,
-): CompactionCount => {
+): number => {
   try {
     const entries = sessionManager?.getEntries?.() ?? [];
     return countPiVccCompactions(entries);
   } catch {
-    return { total: 0, latestOrdinal: 0 };
+    return 0;
   }
 };

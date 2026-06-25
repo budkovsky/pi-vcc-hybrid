@@ -21,7 +21,7 @@ const message = (id: string) => ({ id, type: "message", message: { role: "user" 
 
 describe("countPiVccCompactions", () => {
   test("returns 0 for an empty session", () => {
-    expect(countPiVccCompactions([])).toEqual({ total: 0, latestOrdinal: 0 });
+    expect(countPiVccCompactions([])).toBe(0);
   });
 
   test("counts only pi-vcc compactions, ignoring messages and other compactors", () => {
@@ -32,25 +32,25 @@ describe("countPiVccCompactions", () => {
       message("m2"),
       compaction("c3"),
     ];
-    expect(countPiVccCompactions(entries)).toEqual({ total: 2, latestOrdinal: 2 });
+    expect(countPiVccCompactions(entries)).toBe(2);
   });
 
-  test("latestOrdinal equals total (the just-completed compaction is included)", () => {
+  test("includes the just-completed compaction in the count", () => {
     const entries = [compaction("c1"), compaction("c2"), compaction("c3")];
-    expect(countPiVccCompactions(entries).latestOrdinal).toBe(3);
+    expect(countPiVccCompactions(entries)).toBe(3);
   });
 });
 
 describe("countPiVccCompactionsFromSession", () => {
   test("reads entries from sessionManager.getEntries()", () => {
     const sm = { getEntries: () => [compaction("c1"), compaction("c2")] };
-    expect(countPiVccCompactionsFromSession(sm).total).toBe(2);
+    expect(countPiVccCompactionsFromSession(sm)).toBe(2);
   });
 
   test("returns 0 when sessionManager is undefined or throws", () => {
-    expect(countPiVccCompactionsFromSession(undefined).total).toBe(0);
+    expect(countPiVccCompactionsFromSession(undefined)).toBe(0);
     const throwing = { getEntries: () => { throw new Error("boom"); } };
-    expect(countPiVccCompactionsFromSession(throwing as any).total).toBe(0);
+    expect(countPiVccCompactionsFromSession(throwing as any)).toBe(0);
   });
 });
 

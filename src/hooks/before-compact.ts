@@ -490,9 +490,9 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
     // /pi-vcc path uses its own onComplete callback in the command handler.
     if (!lastCompactWasPiVcc) {
       const stats = lastStats;
-      const { total, latestOrdinal } = countPiVccCompactionsFromSession(ctx?.sessionManager as any);
-      const compactionLabel = total > 0
-        ? ` (${latestOrdinal}${ordinalSuffix(latestOrdinal)} compaction; ${total} total)`
+      const count = countPiVccCompactionsFromSession(ctx?.sessionManager as any);
+      const compactionLabel = count > 0
+        ? ` (${count}${ordinalSuffix(count)} compaction)`
         : "";
       if (stats) {
         setTimeout(() => {
