@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { homedir } from "os";
 import { dirname, join } from "path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
-const SETTINGS_PATH_DEFAULT = join(homedir(), ".pi", "agent", "pi-vcc-config.json");
-const settingsPath = (): string => process.env.PI_VCC_CONFIG_PATH ?? SETTINGS_PATH_DEFAULT;
+const settingsPath = (): string =>
+  process.env.PI_VCC_CONFIG_PATH ?? join(getAgentDir(), "pi-vcc-config.json");
 /** Backwards-compat export. Resolves at access time, not import time. */
 const SETTINGS_PATH = settingsPath();
 
@@ -156,7 +156,7 @@ export function loadSettings(): PiVccSettings {
 }
 
 /**
- * Ensure ~/.pi/agent/pi-vcc-config.json exists with default keys.
+ * Ensure the pi-vcc config file (default ~/.pi/agent/pi-vcc-config.json) exists with default keys.
  * - File missing → create with full default block.
  * - File exists but invalid JSON → no-op (don't clobber user file).
  * - File exists and valid → fill in missing default keys, preserve existing values.

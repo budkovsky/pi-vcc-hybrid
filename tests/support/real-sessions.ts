@@ -1,8 +1,9 @@
 import { mkdir, mkdtemp, copyFile, chmod, readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
-const SESSION_ROOT = join(process.env.HOME ?? "", ".pi/agent/sessions");
+const SESSION_ROOT = join(getAgentDir(), "sessions");
 
 export interface SessionSample {
   source: string;
