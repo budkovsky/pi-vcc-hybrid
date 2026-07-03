@@ -1,12 +1,12 @@
 {
   "name": "@monotykamary/pi-vcc",
-  "version": "0.6.3",
+  "version": "0.7.0",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@monotykamary/pi-vcc",
-      "version": "0.6.3",
+      "version": "0.7.0",
       "devDependencies": {
         "knip": "6.14.1",
         "typescript": "6.0.3"
