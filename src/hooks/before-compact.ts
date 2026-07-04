@@ -150,7 +150,88 @@ const findMidCycleBoundary = (liveMessages: EntryWithMessage[]): number => {
   return best;
 };
 
-export function buildOwnCut(branchEntries: any[]): OwnCutResult {
+/** Rough token estimate (chars/4) for a live message, consistent with the
+ * kept-tokens estimate used elsewhere in this module. */
+function estimateMessageTokens(message: { content: unknown }): number {
+  const c = message.content;
+  let chars = 0;
+  if (typeof c === "string") {
+    chars = c.length;
+  } else if (Array.isArray(c)) {
+    for (const part of c as any[]) {
+      if (part.text) chars += part.text.length;
+      else if (part.type === "toolCall") {
+        const args = part.arguments ?? part.input;
+        chars += (part.name?.length ?? 0) + (typeof args === "string" ? args.length : JSON.stringify(args ?? "").length);
+      } else if (part.type === "toolResult") {
+        chars += typeof part.content === "string" ? part.content.length : JSON.stringify(part.content ?? "").length;
+      } else if (part.type === "thinking") {
+        chars += (part.thinking?.length ?? 0);
+      }
+    }
+  }
+  return Math.ceil(chars / 4);
+}
+
+/** Find a completed tool-cycle boundary within `suffix` such that the kept
+ * tail (suffix[boundary+1 .. end]) fits within `budgetTokens`, keeping as
+ * much recent context as possible. Returns the index of the first message to
+ * KEEP, or -1 when the suffix can't be split to fit (single oversized cycle,
+ * or no completed cycles). */
+const findSuffixSplitPoint = (
+  suffix: EntryWithMessage[],
+  budgetTokens: number,
+): number => {
+  if (suffix.length <= 2) return -1;
+
+  // Completed-cycle end-indices (toolResult closing a cycle). Same detection
+  // as findMidCycleBoundary.
+  const cycleEnds: number[] = [];
+  let currentAssistantIdx = -1;
+  const pendingCalls = new Set<string>();
+  for (let i = 0; i < suffix.length; i++) {
+    const msg = suffix[i].message;
+    if (msg.role === "user") { currentAssistantIdx = -1; pendingCalls.clear(); continue; }
+    if (msg.role === "assistant") {
+      currentAssistantIdx = i;
+      pendingCalls.clear();
+      const content = msg.content;
+      if (Array.isArray(content)) {
+        for (const part of content) {
+          if (part.type === "toolCall" && part.id) pendingCalls.add(part.id);
+        }
+      }
+      continue;
+    }
+    if (msg.role === "toolResult") {
+      const callId = (msg as any).toolCallId as string | undefined;
+      if (callId) pendingCalls.delete(callId);
+      if (pendingCalls.size === 0 && currentAssistantIdx >= 0) {
+        cycleEnds.push(i);
+        currentAssistantIdx = -1;
+      }
+    }
+  }
+  if (cycleEnds.length === 0) return -1;
+
+  // tailTokens[i] = tokens of suffix[i .. end].
+  const tailTokens: number[] = new Array(suffix.length + 1).fill(0);
+  for (let i = suffix.length - 1; i >= 0; i--) {
+    tailTokens[i] = tailTokens[i + 1] + estimateMessageTokens(suffix[i].message);
+  }
+  // Earliest cycle boundary whose kept tail fits — keeps the most recent
+  // context while staying under budget. boundary+1 must be < length so the
+  // kept tail is non-empty.
+  for (const boundary of cycleEnds) {
+    if (boundary + 1 < suffix.length && tailTokens[boundary + 1] <= budgetTokens) {
+      return boundary + 1;
+    }
+  }
+  return -1;
+};
+
+export function buildOwnCut(branchEntries: any[], options?: { maxKeptTokens?: number }): OwnCutResult {
+  const maxKeptTokens = options?.maxKeptTokens ?? 0;
   // Find the last compaction entry and its firstKeptEntryId
   let lastCompactionIdx = -1;
   let lastKeptId: string | undefined;
@@ -235,6 +316,38 @@ export function buildOwnCut(branchEntries: any[]): OwnCutResult {
     }
   }
 
+  // Oversized-turn guard (opt-in via options.maxKeptTokens > 0). When the
+  // kept suffix — the most recent turn from the last user message — exceeds
+  // the budget, keeping it whole would re-overflow on the compaction retry.
+  // Split the turn at a completed tool-cycle boundary so the oversized early
+  // part (typically a giant tool result) is summarized and only recent cycles
+  // that fit are kept. If a single cycle is itself oversized (or there are no
+  // completed cycles to split at), fall back to compact-all — safe because
+  // pi-vcc compiles summaries statically (no LLM call that could overflow).
+  if (cutIdx > 0 && maxKeptTokens > 0) {
+    const suffix = liveMessages.slice(cutIdx);
+    let suffixTokens = 0;
+    for (const e of suffix) suffixTokens += estimateMessageTokens(e.message);
+    if (suffixTokens > maxKeptTokens) {
+      const splitIdx = findSuffixSplitPoint(suffix, maxKeptTokens);
+      if (splitIdx >= 0) {
+        const globalIdx = cutIdx + splitIdx;
+        return {
+          ok: true,
+          messages: liveMessages.slice(0, globalIdx).map((e) => e.message),
+          firstKeptEntryId: liveMessages[globalIdx].entry.id,
+          compactAll: false,
+        };
+      }
+      return {
+        ok: true,
+        messages: liveMessages.map((e) => e.message),
+        firstKeptEntryId: "",
+        compactAll: true,
+      };
+    }
+  }
+
   if (cutIdx <= 0) {
     // Single user prompt (or no user at all) with a long agentic chain.
     // Instead of compact-all (which destroys the tail), find a completed
@@ -301,7 +414,20 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
     // Otherwise, only handle when user opted in via settings.
     if (!isPiVcc && !settings.overrideDefaultCompaction) return;
 
-    const ownCut = buildOwnCut(branchEntries as any[]);
+    // Budget the kept tail so that summary + kept + system/tools + the model's
+    // OUTPUT budget (maxTokens) all fit in the window. Without reserving
+    // maxTokens, the compaction-retry request can be rejected upfront
+    // (input + maxTokens > contextWindow) and re-overflow. Falls back to
+    // pi-core's keepRecentTokens when the window is unknown.
+    const contextWindow = (ctx as any)?.model?.contextWindow ?? 0;
+    const maxTokens = (ctx as any)?.model?.maxTokens ?? 0;
+    const keepRecentTokens = (preparation as any)?.settings?.keepRecentTokens ?? 20000;
+    const overhead = contextWindow > 0 ? Math.min(32768, Math.floor(contextWindow * 0.2)) : 32768;
+    const outputReserve = maxTokens > 0 ? maxTokens : Math.floor(contextWindow * 0.5);
+    const maxKeptTokens = contextWindow > 0
+      ? Math.max(2048, contextWindow - outputReserve - overhead)
+      : keepRecentTokens;
+    const ownCut = buildOwnCut(branchEntries as any[], { maxKeptTokens });
     if (!ownCut.ok) {
       const lastComp = [...branchEntries].reverse().find((e: any) => e.type === "compaction");
       const lastCompIdx = lastComp ? (branchEntries as any[]).indexOf(lastComp) : -1;
