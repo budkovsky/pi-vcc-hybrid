@@ -7,13 +7,14 @@ import {
   isCodexOutputLimitError,
   markCodexContextOverflowPending,
 } from "../core/codex-output-limit";
-import { loadSettings, getModelThreshold, resolveTriggerTokens } from "../core/settings";
+import { loadSettings, getModelThreshold, isPiCoreCompactionEnabled, resolveTriggerTokens } from "../core/settings";
 
 type ProactiveContext = {
   model?: any;
   getContextUsage?: () => any;
   compact?: (options?: any) => void;
   ui?: any;
+  sessionManager?: { getCwd?: () => string };
 };
 
 const formatTokens = (n: number): string => {
@@ -182,11 +183,17 @@ export const registerProactiveThresholdHook = (pi: ExtensionAPI) => {
     }
     if (isCodexContextOverflowError(lastMessage)) {
       markCodexContextOverflowPending();
-      // pi-core's overflow check also requires the assistant message to carry
-      // the current model identity. Codex can omit it on failed responses;
-      // force the recovery only for that case so matching responses continue
-      // through pi-core's normal auto-retry path.
-      if (!hasCurrentModelIdentity(lastMessage, ctx.model)) {
+      // pi-core's overflow compaction only fires when compaction is enabled AND
+      // the assistant message carries the current model identity. If either
+      // is missing pi-core bails (or its LLM compaction would re-overflow), so
+      // pi-vcc must drive the recovery compaction itself via ctx.compact(),
+      // whose manual path skips the `enabled` gate and uses pi-vcc's static
+      // summary. When pi-core will handle it, defer to avoid a racing second
+      // compaction that would abort pi-core's own retry.
+      const piCoreWillHandle =
+        hasCurrentModelIdentity(lastMessage, ctx.model) &&
+        isPiCoreCompactionEnabled(ctx.sessionManager?.getCwd?.());
+      if (!piCoreWillHandle) {
         triggerCodexContextOverflowCompaction(ctx);
       }
       return;

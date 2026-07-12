@@ -1,5 +1,8 @@
-import { describe, test, expect } from "bun:test";
-import { getModelThreshold, resolveReserveTokens, resolveTriggerTokens, type PiVccSettings, type ModelThreshold } from "../src/core/settings";
+import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { getModelThreshold, isPiCoreCompactionEnabled, resolveReserveTokens, resolveTriggerTokens, type PiVccSettings, type ModelThreshold } from "../src/core/settings";
 
 const t = (reserveTokens: number, keepRecentTokens?: number): ModelThreshold => ({
   reserveTokens,
@@ -247,5 +250,50 @@ describe("resolveReserveTokens", () => {
 
   test("compactPercent = 99 → reserve is 1% of contextWindow", () => {
     expect(resolveReserveTokens({ compactPercent: 99 }, 128000)).toBe(1280);
+  });
+});
+
+describe("isPiCoreCompactionEnabled", () => {
+  let agentDir: string;
+  let projectDir: string;
+
+  beforeAll(() => {
+    agentDir = mkdtempSync(join(tmpdir(), "pi-core-agent-"));
+    projectDir = mkdtempSync(join(tmpdir(), "pi-core-project-"));
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+  });
+
+  afterAll(() => {
+    delete process.env.PI_CODING_AGENT_DIR;
+    rmSync(agentDir, { recursive: true, force: true });
+    rmSync(projectDir, { recursive: true, force: true });
+  });
+
+  test("defaults to true when no settings file exists", () => {
+    expect(isPiCoreCompactionEnabled()).toBe(true);
+    expect(isPiCoreCompactionEnabled(projectDir)).toBe(true);
+  });
+
+  test("reads global compaction.enabled", () => {
+    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ compaction: { enabled: false } }));
+    expect(isPiCoreCompactionEnabled()).toBe(false);
+    expect(isPiCoreCompactionEnabled(projectDir)).toBe(false);
+    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ compaction: { enabled: true } }));
+    expect(isPiCoreCompactionEnabled()).toBe(true);
+  });
+
+  test("project settings override global", () => {
+    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ compaction: { enabled: false } }));
+    mkdirSync(join(projectDir, ".pi"), { recursive: true });
+    writeFileSync(join(projectDir, ".pi", "settings.json"), JSON.stringify({ compaction: { enabled: true } }));
+    expect(isPiCoreCompactionEnabled(projectDir)).toBe(true);
+    writeFileSync(join(projectDir, ".pi", "settings.json"), JSON.stringify({ compaction: { enabled: false } }));
+    expect(isPiCoreCompactionEnabled(projectDir)).toBe(false);
+    rmSync(join(projectDir, ".pi"), { recursive: true, force: true });
+  });
+
+  test("falls back to global when project file is absent", () => {
+    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ compaction: { enabled: false } }));
+    expect(isPiCoreCompactionEnabled(projectDir)).toBe(false);
   });
 });

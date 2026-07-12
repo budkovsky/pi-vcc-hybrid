@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 
 const settingsPath = (): string =>
   process.env.PI_VCC_CONFIG_PATH ?? join(getAgentDir(), "pi-vcc-config.json");
@@ -180,6 +180,32 @@ const readJson = (path: string): Record<string, unknown> | null => {
     return null;
   }
 };
+
+const readPiCoreCompactionEnabled = (path: string): boolean | undefined => {
+  const parsed = readJson(path);
+  if (!parsed) return undefined;
+  const enabled = (parsed as { compaction?: { enabled?: unknown } }).compaction?.enabled;
+  return typeof enabled === "boolean" ? enabled : undefined;
+};
+
+/**
+ * Read pi-core's effective `compaction.enabled` setting.
+ *
+ * pi-core's `_checkCompaction` bails immediately when this is false, so neither
+ * overflow nor threshold auto-compaction fires. When that happens pi-vcc must
+ * drive compaction itself via `ctx.compact()` (the manual path skips the
+ * `enabled` gate). Mirrors pi-core's merge: project (`<cwd>/<CONFIG_DIR_NAME>/
+ * settings.json`) overrides global (`<agentDir>/settings.json`); defaults true.
+ */
+export function isPiCoreCompactionEnabled(projectCwd?: string): boolean {
+  const globalEnabled = readPiCoreCompactionEnabled(join(getAgentDir(), "settings.json"));
+  if (projectCwd) {
+    const projectEnabled = readPiCoreCompactionEnabled(join(projectCwd, CONFIG_DIR_NAME, "settings.json"));
+    if (typeof projectEnabled === "boolean") return projectEnabled;
+  }
+  if (typeof globalEnabled === "boolean") return globalEnabled;
+  return true;
+}
 
 export function loadSettings(): PiVccSettings {
   const parsed = readJson(settingsPath());

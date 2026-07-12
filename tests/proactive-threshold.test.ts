@@ -1,22 +1,35 @@
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from "bun:test";
-import { existsSync, unlinkSync, writeFileSync, mkdtempSync, rmSync } from "fs";
+import { existsSync, mkdirSync, unlinkSync, writeFileSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { registerProactiveThresholdHook, resetProactiveState } from "../src/hooks/proactive-threshold";
 
 let tmpDir: string;
 let CONFIG_PATH: string;
+let AGENT_DIR: string;
 
 beforeAll(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "pi-vcc-test-"));
   CONFIG_PATH = join(tmpDir, "pi-vcc-config.json");
+  // Isolate pi-core's settings.json so tests don't read the user's real
+  // ~/.pi/agent/settings.json. Default to compaction enabled; individual
+  // tests override via setPiCoreCompactionEnabled().
+  AGENT_DIR = join(tmpDir, "agent");
+  mkdirSync(AGENT_DIR, { recursive: true });
+  process.env.PI_CODING_AGENT_DIR = AGENT_DIR;
+  setPiCoreCompactionEnabled(true);
   process.env.PI_VCC_CONFIG_PATH = CONFIG_PATH;
 });
 
 afterAll(() => {
   delete process.env.PI_VCC_CONFIG_PATH;
+  delete process.env.PI_CODING_AGENT_DIR;
   rmSync(tmpDir, { recursive: true, force: true });
 });
+
+function setPiCoreCompactionEnabled(enabled: boolean): void {
+  writeFileSync(join(AGENT_DIR, "settings.json"), JSON.stringify({ compaction: { enabled } }));
+}
 
 interface MockResult {
   piApi: any; // the object passed to registerProactiveThresholdHook(pi)
@@ -593,6 +606,7 @@ describe("proactiveThreshold: Codex recovery errors", () => {
   afterEach(() => {
     resetProactiveState();
     if (existsSync(CONFIG_PATH)) unlinkSync(CONFIG_PATH);
+    setPiCoreCompactionEnabled(true);
   });
 
   test("forces compaction without a configured threshold", () => {
@@ -659,6 +673,57 @@ describe("proactiveThreshold: Codex recovery errors", () => {
       }],
     });
 
+    expect(mock.captured).toHaveLength(1);
+    expect(mock.notifyCalls[0].msg).toContain("context window");
+  });
+
+  test("does not force compaction when pi-core is enabled and identity matches", () => {
+    setConfig({ debug: false, overrideDefaultCompaction: true });
+    setPiCoreCompactionEnabled(true);
+    const mock = createMockPi(
+      { id: "luna", provider: "openai-codex", contextWindow: 272000 },
+      { tokens: null, contextWindow: 272000, percent: null },
+    );
+    registerProactiveThresholdHook(mock.piApi);
+
+    mock.emit("agent_end", {
+      type: "agent_end",
+      messages: [{
+        role: "assistant",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        model: "luna",
+        stopReason: "error",
+        errorMessage: "Codex error: Your input exceeds the context window of this model. Please adjust your input and try again.",
+      }],
+    });
+
+    // pi-core owns the overflow compaction here; pi-vcc defers.
+    expect(mock.captured).toHaveLength(0);
+  });
+
+  test("forces compaction when pi-core compaction is disabled even with matching identity", () => {
+    setConfig({ debug: false, overrideDefaultCompaction: true });
+    setPiCoreCompactionEnabled(false);
+    const mock = createMockPi(
+      { id: "luna", provider: "openai-codex", contextWindow: 272000 },
+      { tokens: null, contextWindow: 272000, percent: null },
+    );
+    registerProactiveThresholdHook(mock.piApi);
+
+    mock.emit("agent_end", {
+      type: "agent_end",
+      messages: [{
+        role: "assistant",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        model: "luna",
+        stopReason: "error",
+        errorMessage: "Codex error: Your input exceeds the context window of this model. Please adjust your input and try again.",
+      }],
+    });
+
+    // pi-core's _checkCompaction bails on `enabled: false`; pi-vcc must drive.
     expect(mock.captured).toHaveLength(1);
     expect(mock.notifyCalls[0].msg).toContain("context window");
   });

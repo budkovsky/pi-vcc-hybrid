@@ -11,7 +11,7 @@
  *   the "compact earlier than pi-core" direction.
  */
 import { describe, test, expect, afterEach, beforeAll, afterAll } from "bun:test";
-import { existsSync, unlinkSync, writeFileSync, mkdtempSync, rmSync } from "fs";
+import { existsSync, mkdirSync, unlinkSync, writeFileSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { registerBeforeCompactHook } from "../src/hooks/before-compact";
@@ -20,15 +20,23 @@ import { isCodexContextOverflowPending } from "../src/core/codex-output-limit";
 
 let tmpDir: string;
 let CONFIG_PATH: string;
+let AGENT_DIR: string;
 
 beforeAll(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "pi-vcc-test-"));
   CONFIG_PATH = join(tmpDir, "pi-vcc-config.json");
+  // Isolate pi-core settings (default compaction enabled) so the agent_end
+  // handler's isPiCoreCompactionEnabled() doesn't read the user's real config.
+  AGENT_DIR = join(tmpDir, "agent");
+  mkdirSync(AGENT_DIR, { recursive: true });
+  writeFileSync(join(AGENT_DIR, "settings.json"), JSON.stringify({ compaction: { enabled: true } }));
+  process.env.PI_CODING_AGENT_DIR = AGENT_DIR;
   process.env.PI_VCC_CONFIG_PATH = CONFIG_PATH;
 });
 
 afterAll(() => {
   delete process.env.PI_VCC_CONFIG_PATH;
+  delete process.env.PI_CODING_AGENT_DIR;
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
