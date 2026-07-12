@@ -2,7 +2,11 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { writeFileSync } from "fs";
 import { compile, type CompileInput } from "../core/summarize";
 import {
+  CODEX_CONTEXT_OVERFLOW_COMPACT_INSTRUCTION,
   CODEX_OUTPUT_LIMIT_COMPACT_INSTRUCTION,
+  clearCodexContextOverflowPending,
+  isCodexContextOverflowError,
+  isCodexContextOverflowPending,
   isCodexOutputLimitError,
 } from "../core/codex-output-limit";
 import { loadSettings, type PiVccSettings } from "../core/settings";
@@ -20,7 +24,7 @@ export interface CompactionStats {
 
 let lastStats: CompactionStats | null = null;
 let lastCompactWasPiVcc = false;
-let lastCompactWasCodexOutputLimit = false;
+let lastCompactWasCodexRecovery = false;
 let lastCompactHandledByVcc = false;
 export const getLastCompactionStats = () => lastStats;
 
@@ -394,14 +398,17 @@ const REASON_MESSAGES: Record<OwnCutCancelReason, string> = {
 
 export const shouldResumeAfterCompaction = (
   lastMsg: unknown,
-  allowCodexOutputLimit = false,
+  allowCodexRecovery = false,
 ): boolean => {
   if (!lastMsg || typeof lastMsg !== "object") return false;
   const message = lastMsg as { role?: unknown; stopReason?: unknown };
   if (message.role !== "assistant") return false;
   if (message.stopReason === "stop" || message.stopReason === "aborted") return false;
   if (message.stopReason === "error") {
-    return allowCodexOutputLimit && isCodexOutputLimitError(lastMsg);
+    return allowCodexRecovery && (
+      isCodexOutputLimitError(lastMsg) ||
+      isCodexContextOverflowError(lastMsg)
+    );
   }
   return true;
 };
@@ -430,11 +437,24 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
     const isPiVcc = customInstructions === PI_VCC_COMPACT_INSTRUCTION;
     const isCodexOutputLimitCompaction =
       customInstructions === CODEX_OUTPUT_LIMIT_COMPACT_INSTRUCTION;
-    const isPiVccHandled = isPiVcc || isCodexOutputLimitCompaction;
+    const isCodexContextOverflowMarker =
+      customInstructions === CODEX_CONTEXT_OVERFLOW_COMPACT_INSTRUCTION;
+    const lastBranchAssistant = [...(branchEntries as any[])]
+      .reverse()
+      .find((entry: any) => entry.type === "message" && entry.message?.role === "assistant")
+      ?.message;
+    const isCodexContextOverflowCompaction =
+      isCodexContextOverflowMarker ||
+      (settings.overrideDefaultCompaction &&
+        isCodexContextOverflowPending() &&
+        isCodexContextOverflowError(lastBranchAssistant));
+    const isPiVccHandled =
+      isPiVcc || isCodexOutputLimitCompaction || isCodexContextOverflowCompaction;
 
-    // Always handle explicit /pi-vcc and Codex output-limit markers.
-    // Otherwise, only handle when user opted in via settings.
+    // Always handle explicit /pi-vcc and Codex recovery markers. Otherwise,
+    // only handle when the user opted in via settings.
     if (!isPiVccHandled && !settings.overrideDefaultCompaction) return;
+    if (isCodexContextOverflowCompaction) clearCodexContextOverflowPending();
 
     // Budget the kept tail so that summary + kept + system/tools + the model's
     // OUTPUT budget (maxTokens) all fit in the window. Without reserving
@@ -604,7 +624,8 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
     };
 
     lastCompactWasPiVcc = isPiVcc;
-    lastCompactWasCodexOutputLimit = isCodexOutputLimitCompaction;
+    lastCompactWasCodexRecovery =
+      isCodexOutputLimitCompaction || isCodexContextOverflowCompaction;
     lastCompactHandledByVcc = true;
 
     // Signal to neuralwatt-mcr that pi-vcc is handling compaction
@@ -633,9 +654,9 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
   pi.on("session_compact", (event, ctx) => {
     // Only act when pi-vcc drove the compaction
     if (!lastCompactHandledByVcc) return;
-    const wasCodexOutputLimitCompaction = lastCompactWasCodexOutputLimit;
+    const wasCodexRecoveryCompaction = lastCompactWasCodexRecovery;
     lastCompactHandledByVcc = false;
-    lastCompactWasCodexOutputLimit = false;
+    lastCompactWasCodexRecovery = false;
 
     // Fire success toast for /compact path only (delayed to let UI settle).
     // /pi-vcc path uses its own onComplete callback in the command handler.
@@ -667,13 +688,13 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
     // - Last message is assistant with stopReason=stop (task finished)
     // - Last message is assistant with stopReason=aborted (user cancelled)
     // - Last message is assistant with stopReason=error, unless this was
-    //   the pi-vcc Codex maximum-output recovery compaction
+    //   a pi-vcc Codex recovery compaction
     //
     // We DO continue when:
     // - Last message is assistant with stopReason=toolUse (mid-tool cycle)
     // - Last message is assistant with stopReason=length (hit max tokens)
-    // - Last message is the known Codex maximum-output error from the
-    //   pi-vcc recovery compaction
+    // - Last message is a known Codex recovery error from the pi-vcc
+    //   recovery compaction
     // - Compact-all (firstKeptEntryId="") — context is just the summary,
     //   the agent needs to re-enter the loop to continue the task
     try {
@@ -687,10 +708,10 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
           break;
         }
       }
-      if (!shouldResumeAfterCompaction(lastMsg, wasCodexOutputLimitCompaction)) return;
+      if (!shouldResumeAfterCompaction(lastMsg, wasCodexRecoveryCompaction)) return;
 
       // Agent was mid-task (toolUse or length). The Codex recovery marker
-      // additionally permits its maximum-output error to continue.
+      // additionally permits its known provider errors to continue.
       triggerInvisibleContinue();
     } catch {
       // Non-critical — if context inspection fails, don't block compaction

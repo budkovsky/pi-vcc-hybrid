@@ -16,6 +16,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { registerBeforeCompactHook } from "../src/hooks/before-compact";
 import { registerProactiveThresholdHook, resetProactiveState } from "../src/hooks/proactive-threshold";
+import { isCodexContextOverflowPending } from "../src/core/codex-output-limit";
 
 let tmpDir: string;
 let CONFIG_PATH: string;
@@ -98,6 +99,54 @@ describe("integration: proactive trigger + before-compact", () => {
   afterEach(() => {
     if (existsSync(CONFIG_PATH)) unlinkSync(CONFIG_PATH);
     resetProactiveState();
+  });
+
+  test("Codex context overflow arms VCC recovery without competing compaction", () => {
+    setConfig({ debug: false, overrideDefaultCompaction: true });
+    const { pi, emit, compactCalls } = createMockPi(
+      { id: "luna", provider: "openai-codex", contextWindow: 272000 },
+      { tokens: null, contextWindow: 272000, percent: null },
+    );
+    registerBeforeCompactHook(pi);
+    registerProactiveThresholdHook(pi);
+
+    emit("agent_end", {
+      type: "agent_end",
+      messages: [{
+        role: "assistant",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        model: "luna",
+        stopReason: "error",
+        errorMessage: "Codex error: Your input exceeds the context window of this model. Please adjust your input and try again.",
+      }],
+    });
+
+    expect(compactCalls).toHaveLength(0);
+    expect(isCodexContextOverflowPending()).toBe(true);
+
+    const entries = [
+      msg("m1", "user", "hello"),
+      msg("m2", "assistant", "working"),
+      msg("m3", "user", "continue the task"),
+      {
+        ...msg("m4", "assistant", "overflow"),
+        message: {
+          role: "assistant",
+          content: "overflow",
+          api: "openai-codex-responses",
+          provider: "openai-codex",
+          model: "luna",
+          stopReason: "error",
+          errorMessage: "Codex error: Your input exceeds the context window of this model. Please adjust your input and try again.",
+        },
+      },
+    ];
+    const result = emit("session_before_compact", makeBeforeCompactEvent(entries));
+
+    expect(result?.cancel).toBeUndefined();
+    expect(result?.compaction).toBeDefined();
+    expect(isCodexContextOverflowPending()).toBe(false);
   });
 
   test("proactive trigger then before-compact: does NOT cancel when proactiveTriggerActive", () => {

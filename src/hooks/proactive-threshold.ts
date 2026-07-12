@@ -1,7 +1,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
+  CODEX_CONTEXT_OVERFLOW_COMPACT_INSTRUCTION,
   CODEX_OUTPUT_LIMIT_COMPACT_INSTRUCTION,
+  clearCodexContextOverflowPending,
+  isCodexContextOverflowError,
   isCodexOutputLimitError,
+  markCodexContextOverflowPending,
 } from "../core/codex-output-limit";
 import { loadSettings, getModelThreshold, resolveTriggerTokens } from "../core/settings";
 
@@ -40,6 +44,7 @@ export const isProactiveTriggerActive = () => proactiveTriggerActive;
 export const resetProactiveState = () => {
   lastCompactTime = 0;
   proactiveTriggerActive = false;
+  clearCodexContextOverflowPending();
 };
 
 /**
@@ -105,6 +110,28 @@ const triggerCodexOutputLimitCompaction = (ctx: ProactiveContext) => {
   ctx.compact?.({ customInstructions: CODEX_OUTPUT_LIMIT_COMPACT_INSTRUCTION });
 };
 
+/** Force compaction when Codex omits the model identity from an overflow error. */
+const triggerCodexContextOverflowCompaction = (ctx: ProactiveContext) => {
+  if (isCoolingDown()) return;
+
+  try {
+    ctx?.ui?.notify?.(
+      "pi-vcc: Codex input exceeded the context window. Compacting...",
+      "info",
+    );
+  } catch {}
+
+  setCooldown();
+  proactiveTriggerActive = true;
+  ctx.compact?.({ customInstructions: CODEX_CONTEXT_OVERFLOW_COMPACT_INSTRUCTION });
+};
+
+const hasCurrentModelIdentity = (message: unknown, model: any): boolean => {
+  if (!message || typeof message !== "object" || !model) return false;
+  const candidate = message as { model?: unknown; provider?: unknown };
+  return candidate.model === model.id && candidate.provider === model.provider;
+};
+
 const lastAssistantMessage = (event: unknown): unknown => {
   const messages = (event as any)?.messages;
   if (!Array.isArray(messages)) return undefined;
@@ -142,12 +169,26 @@ const lastAssistantMessage = (event: unknown): unknown => {
  * "Compacting..." then "Skipped compaction" notifications.
  */
 export const registerProactiveThresholdHook = (pi: ExtensionAPI) => {
-  // Codex reports some output-limit responses as errors instead of the
-  // standard "length" stop reason. The error has no usable context usage,
-  // so pi-core cannot discover the need to compact from its normal checks.
+  // Codex reports output-limit responses as errors instead of the standard
+  // "length" stop reason. Those errors have no usable context usage, so
+  // pi-core cannot discover the need to compact from its normal checks.
+  // Context-window errors are tracked separately because pi-core already
+  // recognizes and compacts those.
   pi.on("agent_end", (event, ctx) => {
-    if (isCodexOutputLimitError(lastAssistantMessage(event))) {
+    const lastMessage = lastAssistantMessage(event);
+    if (isCodexOutputLimitError(lastMessage)) {
       triggerCodexOutputLimitCompaction(ctx);
+      return;
+    }
+    if (isCodexContextOverflowError(lastMessage)) {
+      markCodexContextOverflowPending();
+      // pi-core's overflow check also requires the assistant message to carry
+      // the current model identity. Codex can omit it on failed responses;
+      // force the recovery only for that case so matching responses continue
+      // through pi-core's normal auto-retry path.
+      if (!hasCurrentModelIdentity(lastMessage, ctx.model)) {
+        triggerCodexContextOverflowCompaction(ctx);
+      }
       return;
     }
     checkAndTrigger(ctx, "auto");
@@ -162,11 +203,13 @@ export const registerProactiveThresholdHook = (pi: ExtensionAPI) => {
   pi.on("session_compact", () => {
     setCooldown();
     proactiveTriggerActive = false;
+    clearCodexContextOverflowPending();
   });
 
   // Reset state on session start so state doesn't leak between sessions
   pi.on("session_start", () => {
     lastCompactTime = 0;
     proactiveTriggerActive = false;
+    clearCodexContextOverflowPending();
   });
 };

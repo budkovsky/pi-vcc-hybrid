@@ -589,7 +589,7 @@ describe("proactiveThreshold: works for pi-core compaction too", () => {
   });
 });
 
-describe("proactiveThreshold: Codex maximum output error", () => {
+describe("proactiveThreshold: Codex recovery errors", () => {
   afterEach(() => {
     resetProactiveState();
     if (existsSync(CONFIG_PATH)) unlinkSync(CONFIG_PATH);
@@ -638,5 +638,28 @@ describe("proactiveThreshold: Codex maximum output error", () => {
     });
 
     expect(mock.captured).toHaveLength(0);
+  });
+
+  test("forces compaction when Codex omits model identity from context overflow", () => {
+    setConfig({ debug: false, overrideDefaultCompaction: true });
+    const mock = createMockPi(
+      { id: "luna", provider: "openai-codex", contextWindow: 272000 },
+      { tokens: null, contextWindow: 272000, percent: null },
+    );
+    registerProactiveThresholdHook(mock.piApi);
+
+    mock.emit("agent_end", {
+      type: "agent_end",
+      messages: [{
+        role: "assistant",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        stopReason: "error",
+        errorMessage: "Codex error: Your input exceeds the context window of this model. Please adjust your input and try again.",
+      }],
+    });
+
+    expect(mock.captured).toHaveLength(1);
+    expect(mock.notifyCalls[0].msg).toContain("context window");
   });
 });
