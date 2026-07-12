@@ -588,3 +588,55 @@ describe("proactiveThreshold: works for pi-core compaction too", () => {
     expect(mock.captured).toHaveLength(1);
   });
 });
+
+describe("proactiveThreshold: Codex maximum output error", () => {
+  afterEach(() => {
+    resetProactiveState();
+    if (existsSync(CONFIG_PATH)) unlinkSync(CONFIG_PATH);
+  });
+
+  test("forces compaction without a configured threshold", () => {
+    setConfig({ debug: false, overrideDefaultCompaction: true });
+    const mock = createMockPi(
+      { id: "luna", provider: "openai-codex", contextWindow: 272000 },
+      { tokens: null, contextWindow: 272000, percent: null },
+    );
+    registerProactiveThresholdHook(mock.piApi);
+
+    mock.emit("agent_end", {
+      type: "agent_end",
+      messages: [{
+        role: "assistant",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        stopReason: "error",
+        errorMessage: "Model stopped because it reached the maximum output token limit. The response may be incomplete.",
+      }],
+    });
+
+    expect(mock.captured).toHaveLength(1);
+    expect(mock.notifyCalls[0].msg).toContain("maximum output token limit");
+  });
+
+  test("does not force compaction for unrelated Codex errors", () => {
+    setConfig({ debug: false, overrideDefaultCompaction: true });
+    const mock = createMockPi(
+      { id: "luna", provider: "openai-codex", contextWindow: 272000 },
+      { tokens: null, contextWindow: 272000, percent: null },
+    );
+    registerProactiveThresholdHook(mock.piApi);
+
+    mock.emit("agent_end", {
+      type: "agent_end",
+      messages: [{
+        role: "assistant",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        stopReason: "error",
+        errorMessage: "Codex request failed",
+      }],
+    });
+
+    expect(mock.captured).toHaveLength(0);
+  });
+});

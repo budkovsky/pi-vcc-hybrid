@@ -1,5 +1,16 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  CODEX_OUTPUT_LIMIT_COMPACT_INSTRUCTION,
+  isCodexOutputLimitError,
+} from "../core/codex-output-limit";
 import { loadSettings, getModelThreshold, resolveTriggerTokens } from "../core/settings";
+
+type ProactiveContext = {
+  model?: any;
+  getContextUsage?: () => any;
+  compact?: (options?: any) => void;
+  ui?: any;
+};
 
 const formatTokens = (n: number): string => {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
@@ -36,7 +47,7 @@ export const resetProactiveState = () => {
  * if so. Safe to call from multiple event handlers — cooldown prevents
  * double-triggering.
  */
-const checkAndTrigger = (ctx: { model?: any; getContextUsage?: () => any; compact?: () => void; ui?: any }, source: string) => {
+const checkAndTrigger = (ctx: ProactiveContext, source: string) => {
   const settings = loadSettings();
   const threshold = getModelThreshold(settings, ctx.model);
 
@@ -78,6 +89,32 @@ const checkAndTrigger = (ctx: { model?: any; getContextUsage?: () => any; compac
   ctx.compact?.();
 };
 
+/** Force compaction for Codex responses that report an output limit as an error. */
+const triggerCodexOutputLimitCompaction = (ctx: ProactiveContext) => {
+  if (isCoolingDown()) return;
+
+  try {
+    ctx?.ui?.notify?.(
+      "pi-vcc: Codex reached its maximum output token limit. Compacting...",
+      "info",
+    );
+  } catch {}
+
+  setCooldown();
+  proactiveTriggerActive = true;
+  ctx.compact?.({ customInstructions: CODEX_OUTPUT_LIMIT_COMPACT_INSTRUCTION });
+};
+
+const lastAssistantMessage = (event: unknown): unknown => {
+  const messages = (event as any)?.messages;
+  if (!Array.isArray(messages)) return undefined;
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === "assistant") return messages[i];
+  }
+  return undefined;
+};
+
 /**
  * Registers proactive configured compaction thresholds.
  *
@@ -105,8 +142,14 @@ const checkAndTrigger = (ctx: { model?: any; getContextUsage?: () => any; compac
  * "Compacting..." then "Skipped compaction" notifications.
  */
 export const registerProactiveThresholdHook = (pi: ExtensionAPI) => {
-  // Proactive compaction after each agent run
-  pi.on("agent_end", (_event, ctx) => {
+  // Codex reports some output-limit responses as errors instead of the
+  // standard "length" stop reason. The error has no usable context usage,
+  // so pi-core cannot discover the need to compact from its normal checks.
+  pi.on("agent_end", (event, ctx) => {
+    if (isCodexOutputLimitError(lastAssistantMessage(event))) {
+      triggerCodexOutputLimitCompaction(ctx);
+      return;
+    }
     checkAndTrigger(ctx, "auto");
   });
 

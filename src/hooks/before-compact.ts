@@ -1,6 +1,10 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { writeFileSync } from "fs";
 import { compile, type CompileInput } from "../core/summarize";
+import {
+  CODEX_OUTPUT_LIMIT_COMPACT_INSTRUCTION,
+  isCodexOutputLimitError,
+} from "../core/codex-output-limit";
 import { loadSettings, type PiVccSettings } from "../core/settings";
 import { triggerInvisibleContinue } from "../core/invisible-continue";
 import { countPiVccCompactionsFromSession, ordinalSuffix } from "../core/compaction-count";
@@ -16,6 +20,7 @@ export interface CompactionStats {
 
 let lastStats: CompactionStats | null = null;
 let lastCompactWasPiVcc = false;
+let lastCompactWasCodexOutputLimit = false;
 let lastCompactHandledByVcc = false;
 export const getLastCompactionStats = () => lastStats;
 
@@ -387,6 +392,20 @@ const REASON_MESSAGES: Record<OwnCutCancelReason, string> = {
   too_few_live_messages: "pi-vcc: Too few messages to compact",
 };
 
+export const shouldResumeAfterCompaction = (
+  lastMsg: unknown,
+  allowCodexOutputLimit = false,
+): boolean => {
+  if (!lastMsg || typeof lastMsg !== "object") return false;
+  const message = lastMsg as { role?: unknown; stopReason?: unknown };
+  if (message.role !== "assistant") return false;
+  if (message.stopReason === "stop" || message.stopReason === "aborted") return false;
+  if (message.stopReason === "error") {
+    return allowCodexOutputLimit && isCodexOutputLimitError(lastMsg);
+  }
+  return true;
+};
+
 export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
   pi.on("session_before_compact", (event, ctx) => {
     const { preparation, branchEntries, customInstructions } = event;
@@ -409,10 +428,13 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
     // per-model threshold's perspective, but this is preferable to blocking
     // an explicit user action (/compact).
     const isPiVcc = customInstructions === PI_VCC_COMPACT_INSTRUCTION;
+    const isCodexOutputLimitCompaction =
+      customInstructions === CODEX_OUTPUT_LIMIT_COMPACT_INSTRUCTION;
+    const isPiVccHandled = isPiVcc || isCodexOutputLimitCompaction;
 
-    // Always handle explicit /pi-vcc marker.
+    // Always handle explicit /pi-vcc and Codex output-limit markers.
     // Otherwise, only handle when user opted in via settings.
-    if (!isPiVcc && !settings.overrideDefaultCompaction) return;
+    if (!isPiVccHandled && !settings.overrideDefaultCompaction) return;
 
     // Budget the kept tail so that summary + kept + system/tools + the model's
     // OUTPUT budget (maxTokens) all fit in the window. Without reserving
@@ -582,6 +604,7 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
     };
 
     lastCompactWasPiVcc = isPiVcc;
+    lastCompactWasCodexOutputLimit = isCodexOutputLimitCompaction;
     lastCompactHandledByVcc = true;
 
     // Signal to neuralwatt-mcr that pi-vcc is handling compaction
@@ -610,7 +633,9 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
   pi.on("session_compact", (event, ctx) => {
     // Only act when pi-vcc drove the compaction
     if (!lastCompactHandledByVcc) return;
+    const wasCodexOutputLimitCompaction = lastCompactWasCodexOutputLimit;
     lastCompactHandledByVcc = false;
+    lastCompactWasCodexOutputLimit = false;
 
     // Fire success toast for /compact path only (delayed to let UI settle).
     // /pi-vcc path uses its own onComplete callback in the command handler.
@@ -641,12 +666,14 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
     // - Last message is user/toolResult (agent can continue naturally)
     // - Last message is assistant with stopReason=stop (task finished)
     // - Last message is assistant with stopReason=aborted (user cancelled)
-    // - Last message is assistant with stopReason=error (pi-retry handles
-    //   retry via its agent_end handler — avoid duplicate triggerInvisibleContinue)
+    // - Last message is assistant with stopReason=error, unless this was
+    //   the pi-vcc Codex maximum-output recovery compaction
     //
     // We DO continue when:
     // - Last message is assistant with stopReason=toolUse (mid-tool cycle)
     // - Last message is assistant with stopReason=length (hit max tokens)
+    // - Last message is the known Codex maximum-output error from the
+    //   pi-vcc recovery compaction
     // - Compact-all (firstKeptEntryId="") — context is just the summary,
     //   the agent needs to re-enter the loop to continue the task
     try {
@@ -660,21 +687,10 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
           break;
         }
       }
-      if (!lastMsg || lastMsg.role !== "assistant") return;
+      if (!shouldResumeAfterCompaction(lastMsg, wasCodexOutputLimitCompaction)) return;
 
-      // Agent completed its turn cleanly — no continuation needed
-      if (lastMsg.stopReason === "stop") return;
-
-      // Agent was aborted by user — don't auto-continue
-      if (lastMsg.stopReason === "aborted") return;
-
-      // Agent hit an error — pi-retry handles this via its agent_end handler.
-      // If we also fire triggerInvisibleContinue, both extensions race
-      // to call prompt([]), causing "Agent is already processing" (wasteful)
-      // or a duplicate continuation. Let pi-retry own error retries.
-      if (lastMsg.stopReason === "error") return;
-
-      // Agent was mid-task (toolUse or length) — needs to continue.
+      // Agent was mid-task (toolUse or length). The Codex recovery marker
+      // additionally permits its maximum-output error to continue.
       triggerInvisibleContinue();
     } catch {
       // Non-critical — if context inspection fails, don't block compaction
