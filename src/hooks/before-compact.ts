@@ -28,6 +28,8 @@ let lastCompactWasPiVcc = false;
 let lastCompactWasCodexRecovery = false;
 let lastCompactWasProactive = false;
 let lastCompactHandledByVcc = false;
+let lastCompactDeferredToFabric = false;
+let hasNotifiedFabricDeferral = false;
 export const getLastCompactionStats = () => lastStats;
 
 const formatTokens = (n: number): string => {
@@ -459,6 +461,9 @@ export function shouldTriggerResumeForCompaction(
 
 export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
   pi.on("session_before_compact", (event, ctx) => {
+    // pi-fabric may run before pi-vcc and mark the shared event after claiming it.
+    if ((event as any)._fabricCompaction === true) return;
+
     const { preparation, branchEntries, customInstructions } = event;
     const settings = loadSettings();
 
@@ -494,6 +499,32 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
         isCodexContextOverflowError(lastBranchAssistant));
     const isPiVccHandled =
       isPiVcc || isCodexOutputLimitCompaction || isCodexContextOverflowCompaction;
+
+    // Explicit /pi-vcc takes precedence over the pi-fabric engine. For every
+    // other compaction, retain pi-vcc's trigger/recovery bookkeeping but let
+    // pi-fabric compile the summary.
+    if (!isPiVcc && process.env.PI_FABRIC_COMPACTION_ENGINE === "fabric") {
+      if (!isPiVccHandled && !settings.overrideDefaultCompaction) return;
+      if (isCodexContextOverflowCompaction) clearCodexContextOverflowPending();
+
+      lastCompactWasPiVcc = false;
+      lastCompactWasCodexRecovery =
+        isCodexOutputLimitCompaction || isCodexContextOverflowCompaction;
+      lastCompactWasProactive = isProactiveTriggerActive();
+      lastCompactHandledByVcc = true;
+      lastCompactDeferredToFabric = true;
+
+      if (settings.overrideDefaultCompaction && !hasNotifiedFabricDeferral) {
+        hasNotifiedFabricDeferral = true;
+        try {
+          ctx?.ui?.notify?.(
+            "pi-vcc: deferring compaction to pi-fabric engine (explicit /pi-vcc still uses pi-vcc)",
+            "info",
+          );
+        } catch {}
+      }
+      return;
+    }
 
     // Always handle explicit /pi-vcc and Codex recovery markers. Otherwise,
     // only handle when the user opted in via settings.
@@ -672,6 +703,7 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
       isCodexOutputLimitCompaction || isCodexContextOverflowCompaction;
     lastCompactWasProactive = isProactiveTriggerActive();
     lastCompactHandledByVcc = true;
+    lastCompactDeferredToFabric = false;
 
     // Signal to neuralwatt-mcr that pi-vcc is handling compaction
     // so it doesn't cancel the event. Without this flag, neuralwatt-mcr
@@ -689,6 +721,10 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
     };
   });
 
+  pi.on("session_start", () => {
+    hasNotifiedFabricDeferral = false;
+  });
+
   // After compaction completes, check if the agent loop stalled and needs
   // an invisible continue to resume.  This handles threshold compaction
   // where willRetry=false — pi-core doesn't auto-retry, and the agent loop
@@ -697,17 +733,20 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
   // that isn't a clean end_turn), the agent was interrupted and should
   // continue.
   pi.on("session_compact", (event, ctx) => {
-    // Only act when pi-vcc drove the compaction
+    // Act when pi-vcc compiled the summary or tracked a compaction delegated
+    // to pi-fabric so proactive and Codex recovery continuation still works.
     if (!lastCompactHandledByVcc) return;
     const wasCodexRecoveryCompaction = lastCompactWasCodexRecovery;
     const wasProactiveCompaction = lastCompactWasProactive;
+    const wasDeferredToFabric = lastCompactDeferredToFabric;
     lastCompactHandledByVcc = false;
     lastCompactWasCodexRecovery = false;
     lastCompactWasProactive = false;
+    lastCompactDeferredToFabric = false;
 
-    // Fire success toast for /compact path only (delayed to let UI settle).
-    // /pi-vcc path uses its own onComplete callback in the command handler.
-    if (!lastCompactWasPiVcc) {
+    // Fire success toast for pi-vcc's /compact path only (delayed to let UI
+    // settle). /pi-vcc has its own callback, and pi-fabric owns delegated UI.
+    if (!lastCompactWasPiVcc && !wasDeferredToFabric) {
       const stats = lastStats;
       const count = countPiVccCompactionsFromSession(ctx?.sessionManager as any);
       const compactionLabel = count > 0

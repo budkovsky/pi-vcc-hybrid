@@ -3,6 +3,12 @@ import { existsSync, unlinkSync, writeFileSync, readFileSync, mkdtempSync, rmSyn
 import { tmpdir } from "os";
 import { join } from "path";
 import { registerBeforeCompactHook, PI_VCC_COMPACT_INSTRUCTION } from "../src/hooks/before-compact";
+import {
+  CODEX_OUTPUT_LIMIT_COMPACT_INSTRUCTION,
+  isCodexContextOverflowPending,
+  markCodexContextOverflowPending,
+} from "../src/core/codex-output-limit";
+import { VCC_RESUME_CUSTOM_TYPE } from "../src/core/invisible-continue";
 
 let tmpDir: string;
 let CONFIG_PATH: string;
@@ -16,29 +22,48 @@ beforeAll(() => {
 
 afterAll(() => {
   delete process.env.PI_VCC_CONFIG_PATH;
+  delete process.env.PI_FABRIC_COMPACTION_ENGINE;
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
-// Minimal ExtensionAPI stub: capture handler + provide ctx with mocked ui.notify
+// Minimal ExtensionAPI stub: capture handlers and provide mocked UI/session APIs.
 function createMockPi() {
-  let handler: ((event: any, ctx: any) => any) | undefined;
+  const handlers = new Map<string, Array<(event: any, ctx: any) => any>>();
   const notifyCalls: Array<{ msg: string; level: string }> = [];
+  const sentMessages: Array<{ message: any; options: any }> = [];
   const ctx = {
     hasUI: true,
+    isIdle: () => true,
+    sessionManager: { getEntries: () => [] },
     ui: {
       notify: (msg: string, level: string) => {
         notifyCalls.push({ msg, level });
       },
     },
   };
+  const pi = {
+    on: (eventName: string, handler: (event: any, context: any) => any) => {
+      const eventHandlers = handlers.get(eventName) ?? [];
+      eventHandlers.push(handler);
+      handlers.set(eventName, eventHandlers);
+    },
+    sendMessage: (message: any, options: any) => {
+      sentMessages.push({ message, options });
+    },
+  } as any;
   return {
-    pi: {
-      on: (eventName: string, h: (e: any, c: any) => any) => {
-        if (eventName === "session_before_compact") handler = h;
-      },
-    } as any,
-    invoke: (event: any) => handler!(event, ctx),
+    pi,
+    invoke: (event: any) => handlers.get("session_before_compact")![0](event, ctx),
+    emit: (eventName: string, event: any = {}, context: any = ctx) => {
+      let result: any;
+      for (const handler of handlers.get(eventName) ?? []) {
+        const next = handler(event, context);
+        if (next !== undefined) result = next;
+      }
+      return result;
+    },
     notifyCalls,
+    sentMessages,
   };
 }
 
@@ -152,6 +177,129 @@ describe("registerBeforeCompactHook: cancel paths", () => {
     const entries = [msg("m1", "user"), msg("m2", "assistant")];
     expect(invoke(makeEvent(entries, PI_VCC_COMPACT_INSTRUCTION))).toEqual({ cancel: true });
     expect(existsSync(DEBUG_PATH)).toBe(false);
+  });
+});
+
+describe("registerBeforeCompactHook: pi-fabric interop", () => {
+  beforeEach(() => {
+    delete process.env.PI_FABRIC_COMPACTION_ENGINE;
+  });
+  afterEach(() => {
+    delete process.env.PI_FABRIC_COMPACTION_ENGINE;
+    if (existsSync(CONFIG_PATH)) unlinkSync(CONFIG_PATH);
+  });
+
+  test("defers when pi-fabric already claimed the event", () => {
+    setConfig({ debug: false, overrideDefaultCompaction: true });
+    const { pi, invoke, notifyCalls } = createMockPi();
+    registerBeforeCompactHook(pi);
+
+    const event = makeEvent([
+      msg("m1", "user", "go"),
+      msg("m2", "assistant", "work"),
+      msg("m3", "user", "continue"),
+    ], PI_VCC_COMPACT_INSTRUCTION) as any;
+    event._fabricCompaction = true;
+
+    expect(invoke(event)).toBeUndefined();
+    expect(notifyCalls).toHaveLength(0);
+  });
+
+  test("defers to the configured pi-fabric engine and notifies once per session", () => {
+    setConfig({ debug: false, overrideDefaultCompaction: true });
+    process.env.PI_FABRIC_COMPACTION_ENGINE = "fabric";
+    const { pi, invoke, emit, notifyCalls } = createMockPi();
+    registerBeforeCompactHook(pi);
+    emit("session_start");
+
+    const event = makeEvent([
+      msg("m1", "user", "go"),
+      msg("m2", "assistant", "work"),
+      msg("m3", "user", "continue"),
+    ]);
+    expect(invoke(event)).toBeUndefined();
+    expect(invoke(event)).toBeUndefined();
+    expect(notifyCalls).toEqual([{
+      msg: "pi-vcc: deferring compaction to pi-fabric engine (explicit /pi-vcc still uses pi-vcc)",
+      level: "info",
+    }]);
+
+    emit("session_start");
+    expect(invoke(event)).toBeUndefined();
+    expect(notifyCalls).toHaveLength(2);
+  });
+
+  test("explicit /pi-vcc takes precedence over the pi-fabric engine", () => {
+    setConfig({ debug: false, overrideDefaultCompaction: false });
+    process.env.PI_FABRIC_COMPACTION_ENGINE = "fabric";
+    const { pi, invoke } = createMockPi();
+    registerBeforeCompactHook(pi);
+
+    const result = invoke(makeEvent([
+      msg("m1", "user", "go"),
+      msg("m2", "assistant", "calling tool"),
+      msg("m3", "toolResult", "result"),
+      msg("m4", "assistant", "done"),
+    ], PI_VCC_COMPACT_INSTRUCTION));
+
+    expect(result.compaction).toBeDefined();
+  });
+
+  test("preserves Codex output-limit recovery continuation while deferring", () => {
+    setConfig({ debug: false, overrideDefaultCompaction: false });
+    process.env.PI_FABRIC_COMPACTION_ENGINE = "fabric";
+    const { pi, invoke, emit, sentMessages } = createMockPi();
+    registerBeforeCompactHook(pi);
+    const codexError = {
+      role: "assistant",
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      stopReason: "error",
+      errorMessage: "Model stopped because it reached the maximum output token limit.",
+    };
+    const entries = [
+      msg("m1", "user", "go"),
+      { id: "m2", type: "message", message: codexError },
+    ];
+
+    expect(invoke(makeEvent(entries, CODEX_OUTPUT_LIMIT_COMPACT_INSTRUCTION))).toBeUndefined();
+    emit("session_compact", { reason: "threshold", willRetry: false }, {
+      isIdle: () => true,
+      sessionManager: { getEntries: () => entries },
+    });
+
+    expect(sentMessages).toHaveLength(1);
+    expect(sentMessages[0].message.customType).toBe(VCC_RESUME_CUSTOM_TYPE);
+    expect(sentMessages[0].options).toEqual({ triggerTurn: true, deliverAs: "followUp" });
+  });
+
+  test("detects and clears pending Codex context overflow while deferring", () => {
+    setConfig({ debug: false, overrideDefaultCompaction: true });
+    process.env.PI_FABRIC_COMPACTION_ENGINE = "fabric";
+    const { pi, invoke, emit, sentMessages } = createMockPi();
+    registerBeforeCompactHook(pi);
+    markCodexContextOverflowPending();
+    const codexError = {
+      role: "assistant",
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      stopReason: "error",
+      errorMessage: "Codex error: Your input exceeds the context window of this model.",
+    };
+    const entries = [
+      msg("m1", "user", "go"),
+      { id: "m2", type: "message", message: codexError },
+    ];
+
+    expect(invoke(makeEvent(entries))).toBeUndefined();
+    expect(isCodexContextOverflowPending()).toBe(false);
+    emit("session_compact", { reason: "overflow", willRetry: false }, {
+      isIdle: () => true,
+      sessionManager: { getEntries: () => entries },
+    });
+
+    expect(sentMessages).toHaveLength(1);
+    expect(sentMessages[0].message.customType).toBe(VCC_RESUME_CUSTOM_TYPE);
   });
 });
 

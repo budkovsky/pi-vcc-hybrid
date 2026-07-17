@@ -236,11 +236,17 @@ pi -e https://github.com/monotykamary/pi-vcc@tom
 Once installed, pi-vcc registers a `session_before_compact` hook.
 
 - Run `/pi-vcc` to trigger pi-vcc compaction manually.
-- By default, pi-vcc handles all compaction paths (`/compact`, auto-threshold, `/pi-vcc`). Set `overrideDefaultCompaction: false` in the config to fall back to pi core's LLM-based compaction for `/compact` and auto-threshold.
+- By default, pi-vcc handles all compaction paths (`/compact`, auto-threshold, `/pi-vcc`). Set `overrideDefaultCompaction: false` in the config to fall back to pi core's LLM-based compaction for `/compact` and auto-threshold. When pi-fabric's compaction engine is active, pi-vcc retains its threshold and recovery triggers but delegates non-`/pi-vcc` summary compilation to pi-fabric.
 - To search older active-lineage history after compaction, use `vcc_recall`.
 - To intentionally search across all lineages, pass `scope:"all"` to `vcc_recall` or run `/pi-vcc-recall <query> scope:all`.
 - To search and feed results to agent yourself, run `/pi-vcc-recall <query> [page:N]`.
   - Tip: type `/recall` and Pi will autocomplete to `/pi-vcc-recall`.
+
+### pi-fabric interop
+
+When `PI_FABRIC_COMPACTION_ENGINE=fabric`, pi-vcc defers non-explicit summary compilation to pi-fabric while preserving its proactive-threshold and Codex recovery trigger behavior. pi-fabric marks an event it has already claimed with `_fabricCompaction === true`, which prevents pi-vcc from replacing that result. An explicit `/pi-vcc` uses the `__pi_vcc__` instruction sentinel and always runs pi-vcc's deterministic compiler.
+
+The precedence is: explicit `/pi-vcc` sentinel > pi-fabric engine > pi-vcc default override.
 
 ### How compaction works
 
@@ -573,7 +579,7 @@ Config lives at `~/.pi/agent/pi-vcc-config.json` (auto-scaffolded on first load 
 }
 ```
 
-- **`overrideDefaultCompaction`** *(default `true`)*: when `true` (default), pi-vcc handles all compaction paths (`/compact`, auto-threshold, `/pi-vcc`). Set `false` to let pi core handle `/compact` and auto-threshold compactions via its default LLM-based compaction.
+- **`overrideDefaultCompaction`** *(default `true`)*: when `true` (default), pi-vcc handles all compaction paths (`/compact`, auto-threshold, `/pi-vcc`) unless the active pi-fabric engine owns summary compilation. Set `false` to let pi core handle `/compact` and auto-threshold compactions via its default LLM-based compaction. Explicit `/pi-vcc` always uses pi-vcc.
 - **`debug`** *(default `false`)*: when `true`, each compaction writes detailed info to `/tmp/pi-vcc-debug.json` — message counts, cut boundary, summary preview, sections.
 - **`modelThresholds`** *(default: none)*: per-model compaction thresholds. Keys match against `"provider/modelId"` (e.g., `"neuralwatt/zai-org/GLM-5.1-FP8"`) or just `"modelId"` (e.g., `"GLM-5.1"` — matched only when `provider/modelId` doesn't). Each value has:
   - **`reserveTokens`**: tokens to reserve for the LLM response. Overrides pi-core's global `compaction.reserveTokens` for matching models. Controls *when* compaction triggers: `contextTokens > contextWindow − reserveTokens`. A higher value compacts earlier (more conservative); a lower value lets context grow larger. Takes precedence over `compactAtTokens` and `compactPercent` when multiple are set.
