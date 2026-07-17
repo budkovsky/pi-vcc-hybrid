@@ -5,17 +5,14 @@ import { registerProactiveThresholdHook } from "./src/hooks/proactive-threshold"
 import { registerPiVccCommand } from "./src/commands/pi-vcc";
 import { registerVccRecallCommand } from "./src/commands/vcc-recall";
 import { registerRecallTool } from "./src/tools/recall";
-import { resetInvisibleContinue } from "./src/core/invisible-continue";
+import { registerInvisibleContinue } from "./src/core/invisible-continue";
 
 export default (pi: ExtensionAPI) => {
   scaffoldSettings();
+  registerInvisibleContinue(pi);
   registerBeforeCompactHook(pi);
   registerProactiveThresholdHook(pi);
   registerPiVccCommand(pi);
   registerVccRecallCommand(pi);
   registerRecallTool(pi);
-
-  pi.on("session_start", () => {
-    resetInvisibleContinue();
-  });
 };

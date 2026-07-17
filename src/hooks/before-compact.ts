@@ -11,6 +11,7 @@ import {
 } from "../core/codex-output-limit";
 import { loadSettings, type PiVccSettings } from "../core/settings";
 import { triggerInvisibleContinue } from "../core/invisible-continue";
+import { isProactiveTriggerActive } from "./proactive-threshold";
 import { countPiVccCompactionsFromSession, ordinalSuffix } from "../core/compaction-count";
 import type { PiVccCompactionDetails } from "../details";
 
@@ -25,6 +26,7 @@ export interface CompactionStats {
 let lastStats: CompactionStats | null = null;
 let lastCompactWasPiVcc = false;
 let lastCompactWasCodexRecovery = false;
+let lastCompactWasProactive = false;
 let lastCompactHandledByVcc = false;
 export const getLastCompactionStats = () => lastStats;
 
@@ -97,6 +99,19 @@ interface EntryWithMessage {
   entry: { id: string; type: string };
   message: { role: string; content: unknown };
 }
+
+const isHiddenEmptyCustomMessage = (message: unknown): boolean => {
+  if (!message || typeof message !== "object") return false;
+  const candidate = message as {
+    role?: unknown;
+    content?: unknown;
+    display?: unknown;
+  };
+  if (candidate.role !== "custom" || candidate.display !== false) return false;
+  return candidate.content === "" || (
+    Array.isArray(candidate.content) && candidate.content.length === 0
+  );
+};
 
 export type OwnCutCancelReason =
   | "no_live_messages"
@@ -265,7 +280,11 @@ export function buildOwnCut(branchEntries: any[], options?: { maxKeptTokens?: nu
     for (let i = lastCompactionIdx + 1; i < branchEntries.length; i++) {
       const e = branchEntries[i];
       if (e.type === "compaction") continue;
-      if (e.type === "message" && e.message) {
+      if (
+        e.type === "message" &&
+        e.message &&
+        !isHiddenEmptyCustomMessage(e.message)
+      ) {
         liveMessages.push({ entry: e, message: e.message });
       }
     }
@@ -275,7 +294,11 @@ export function buildOwnCut(branchEntries: any[], options?: { maxKeptTokens?: nu
       if (!foundKept && e.id === lastKeptId) foundKept = true;
       if (!foundKept) continue;
       if (e.type === "compaction") continue;
-      if (e.type === "message" && e.message) {
+      if (
+        e.type === "message" &&
+        e.message &&
+        !isHiddenEmptyCustomMessage(e.message)
+      ) {
         liveMessages.push({ entry: e, message: e.message });
       }
     }
@@ -412,6 +435,27 @@ export const shouldResumeAfterCompaction = (
   }
   return true;
 };
+
+export type CompactionCompletionMetadata = {
+  reason?: "manual" | "threshold" | "overflow";
+  willRetry?: boolean;
+};
+
+export function shouldTriggerResumeForCompaction(
+  event: CompactionCompletionMetadata,
+  sessionIsIdle: boolean,
+  wasProactiveCompaction: boolean,
+  wasCodexRecoveryCompaction: boolean,
+): boolean {
+  if (event.willRetry) return true;
+  if (wasCodexRecoveryCompaction || wasProactiveCompaction) return true;
+  if (event.reason === "manual" || event.reason === "overflow") return false;
+  if (event.reason === "threshold") return !sessionIsIdle;
+
+  // Pi before 0.79.10 did not expose compaction reason metadata. Be
+  // conservative there: an idle session may be manual or pre-prompt.
+  return !sessionIsIdle;
+}
 
 export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
   pi.on("session_before_compact", (event, ctx) => {
@@ -626,6 +670,7 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
     lastCompactWasPiVcc = isPiVcc;
     lastCompactWasCodexRecovery =
       isCodexOutputLimitCompaction || isCodexContextOverflowCompaction;
+    lastCompactWasProactive = isProactiveTriggerActive();
     lastCompactHandledByVcc = true;
 
     // Signal to neuralwatt-mcr that pi-vcc is handling compaction
@@ -655,8 +700,10 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
     // Only act when pi-vcc drove the compaction
     if (!lastCompactHandledByVcc) return;
     const wasCodexRecoveryCompaction = lastCompactWasCodexRecovery;
+    const wasProactiveCompaction = lastCompactWasProactive;
     lastCompactHandledByVcc = false;
     lastCompactWasCodexRecovery = false;
+    lastCompactWasProactive = false;
 
     // Fire success toast for /compact path only (delayed to let UI settle).
     // /pi-vcc path uses its own onComplete callback in the command handler.
@@ -708,11 +755,29 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
           break;
         }
       }
-      if (!shouldResumeAfterCompaction(lastMsg, wasCodexRecoveryCompaction)) return;
+      // A core-owned retry also gets a marker. Agent.continue() drains the
+      // queued marker before checking the assistant-tail role, so no Agent
+      // prototype fallback is needed.
+      const completion = event as CompactionCompletionMetadata;
+      const legacyActiveCompaction =
+        completion.reason === undefined &&
+        completion.willRetry === undefined &&
+        !ctx.isIdle();
+      if (
+        !completion.willRetry &&
+        !legacyActiveCompaction &&
+        !shouldResumeAfterCompaction(lastMsg, wasCodexRecoveryCompaction)
+      ) return;
+      if (!shouldTriggerResumeForCompaction(
+        completion,
+        ctx.isIdle(),
+        wasProactiveCompaction,
+        wasCodexRecoveryCompaction,
+      )) return;
 
-      // Agent was mid-task (toolUse or length). The Codex recovery marker
-      // additionally permits its known provider errors to continue.
-      triggerInvisibleContinue();
+      // Queue through Pi's native follow-up path so a concurrent user prompt
+      // wins cleanly instead of racing a low-level Agent.prompt([]) call.
+      triggerInvisibleContinue(pi);
     } catch {
       // Non-critical — if context inspection fails, don't block compaction
     }
