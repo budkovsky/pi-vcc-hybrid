@@ -168,6 +168,57 @@ describe("searchEntries", () => {
     expect(r[0].snippet).toContain("race condition");
   });
 
+  // ── toolCall argument searchability (bash command, edit text) ──
+
+  it("finds terms in a bash toolCall's arguments.command", () => {
+    const e: RenderedEntry[] = [
+      { index: 0, role: "user", summary: "set up env" },
+      { index: 1, role: "assistant", summary: "bash command=DEV_API_KEY grep" },
+    ];
+    const m: Message[] = [
+      { role: "user", content: "set up env" } as any,
+      { role: "assistant", content: [
+        { type: "text", text: "let me grep for the key" },
+        { type: "toolCall", name: "bash", id: "tc_1", arguments: { command: "DEV_API_KEY=$(grep DEV_API_KEY .dev.vars) curl -X POST https://api.test" } },
+      ] } as any,
+    ];
+    // Query has no regex metacharacters, so it takes the BM25 term path
+    // (the .dev.vars dots would otherwise make the whole query a single
+    // contiguous regex — a separate query-parsing concern).
+    const r = searchEntries(e, m, "DEV_API_KEY grep curl");
+    expect(r).toHaveLength(1);
+    expect(r[0].index).toBe(1);
+    expect(r[0].snippet).toContain("DEV_API_KEY");
+  });
+
+  it("finds terms in a non-bash toolCall's string args (edit newText)", () => {
+    const e: RenderedEntry[] = [
+      { index: 0, role: "assistant", summary: "edit" },
+    ];
+    const m: Message[] = [
+      { role: "assistant", content: [
+        { type: "text", text: "applying the fix" },
+        { type: "toolCall", name: "edit", id: "tc_1", arguments: { path: "a.ts", oldText: "oldToken", newText: "freshToken" } },
+      ] } as any,
+    ];
+    const r = searchEntries(e, m, "freshToken");
+    expect(r).toHaveLength(1);
+    expect(r[0].snippet).toContain("freshToken");
+  });
+
+  it("does not match on toolCall args that are absent (regression guard)", () => {
+    const e: RenderedEntry[] = [
+      { index: 0, role: "assistant", summary: "reading" },
+    ];
+    const m: Message[] = [
+      { role: "assistant", content: [
+        { type: "text", text: "looking around" },
+        { type: "toolCall", name: "read", id: "tc_1", arguments: { path: "a.ts" } },
+      ] } as any,
+    ];
+    expect(searchEntries(e, m, "DEV_API_KEY")).toEqual([]);
+  });
+
   // ── search result grounding (prevents "half the session" returns) ──
 
   it("filters low-relevance BM25 hits by score ratio threshold", () => {

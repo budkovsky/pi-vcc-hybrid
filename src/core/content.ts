@@ -59,6 +59,28 @@ const thinkingParts = (content: Message["content"]): string[] => {
 export const thinkingOf = (content: Message["content"]): string =>
   thinkingParts(content).join("\n");
 
+const toolCallArgText = (args: Record<string, unknown>): string => {
+  const vals: string[] = [];
+  for (const v of Object.values(args ?? {})) {
+    if (typeof v === "string" && v.length > 0) vals.push(v);
+  }
+  return vals.join("\n");
+};
+
+const toolCallParts = (content: Message["content"]): string[] => {
+  if (!content || typeof content === "string") return [];
+  return content
+    .filter((part) => part.type === "toolCall")
+    .map((part) => toolCallArgText(part.arguments));
+};
+
+/** Extract all string-valued arguments from toolCall content parts.
+ *  Lets vcc_recall match against tool invocations — e.g. a bash
+ *  toolCall's `arguments.command`, a grep's `pattern`, an edit's
+ *  `oldText`/`newText`. Non-string args are skipped. */
+export const toolCallsOf = (content: Message["content"]): string =>
+  toolCallParts(content).filter(Boolean).join("\n");
+
 /** Extract a snippet of ~`radius` chars around the first match of `term` in `text`. */
 const snippet = (text: string, term: string, radius = 60): string | null => {
   const idx = text.toLowerCase().indexOf(term.toLowerCase());
