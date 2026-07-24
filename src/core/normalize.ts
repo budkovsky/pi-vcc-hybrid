@@ -2,6 +2,7 @@ import type { Message } from "@earendil-works/pi-ai";
 import type { NormalizedBlock } from "../types";
 import { textOf } from "./content";
 import { sanitize } from "./sanitize";
+import { fabricOperationsOf, fabricResultText } from "./fabric-trace";
 
 const normalizeOne = (msg: Message, msgIndex: number): NormalizedBlock[] => {
   if (msg.role === "user") {
@@ -26,13 +27,31 @@ const normalizeOne = (msg: Message, msgIndex: number): NormalizedBlock[] => {
   }
 
   if (msg.role === "toolResult") {
-    return [{
+    const blocks: NormalizedBlock[] = [{
       kind: "tool_result",
       name: msg.toolName,
       text: sanitize(textOf(msg.content)),
       isError: msg.isError,
       sourceIndex: msgIndex,
     }];
+    if (msg.toolName === "fabric_exec") {
+      for (const operation of fabricOperationsOf((msg as any).details)) {
+        blocks.push({
+          kind: "tool_call",
+          name: operation.name,
+          args: operation.args,
+          sourceIndex: msgIndex,
+        });
+        blocks.push({
+          kind: "tool_result",
+          name: operation.name,
+          text: sanitize(fabricResultText(operation)),
+          isError: operation.outcome !== "succeeded",
+          sourceIndex: msgIndex,
+        });
+      }
+    }
+    return blocks;
   }
 
   if (msg.role === "assistant") {

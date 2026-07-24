@@ -248,6 +248,8 @@ When `PI_FABRIC_COMPACTION_ENGINE=fabric`, pi-vcc defers non-explicit summary co
 
 The precedence is: explicit `/pi-vcc` sentinel > pi-fabric engine > pi-vcc default override.
 
+For explicit `/pi-vcc` compactions, pi-vcc also expands the durable execution trace stored on each `fabric_exec` result. Nested `pi.*`, MCP, extension, agent, and other Fabric provider calls participate in file tracking, error extraction, the brief transcript, and `vcc_recall` search just like top-level tool calls. Current trace details and legacy Fabric audit details are both supported.
+
 ### How compaction works
 
 Pi splits the conversation at the **last user message**. Everything after — the **kept tail** — stays intact and untouched. pi-vcc only summarizes the older portion before that cut point.

@@ -1,6 +1,7 @@
 import type { Message } from "@earendil-works/pi-ai";
 import type { RenderedEntry } from "./render-entries";
 import { textOf, thinkingOf, toolCallsOf } from "./content";
+import { fabricArgsText, fabricOperationsOf, fabricResultText } from "./fabric-trace";
 
 export interface SearchHit extends RenderedEntry {
   /** Context snippet around the first matched term (only when query provided) */
@@ -273,6 +274,17 @@ const fullText = (msg: Message): string => {
   // Include thinking + toolCall arguments so recall can match against
   // model reasoning and tool invocations (e.g. a bash toolCall's command).
   let text = textOf(msg.content);
+  if (msg.role === "toolResult" && msg.toolName === "fabric_exec") {
+    const nested = fabricOperationsOf((msg as any).details)
+      .flatMap((operation) => [
+        operation.ref,
+        fabricArgsText(operation),
+        fabricResultText(operation),
+      ])
+      .filter(Boolean)
+      .join("\n");
+    if (nested) text += "\n" + nested;
+  }
   const thinking = thinkingOf(msg.content);
   if (thinking) text = thinking + "\n" + text;
   const toolArgs = toolCallsOf(msg.content);
