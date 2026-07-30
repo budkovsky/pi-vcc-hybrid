@@ -15,9 +15,9 @@
     "url": "git+https://github.com/monotykamary/pi-vcc.git"
   },
   "peerDependencies": {
-    "@earendil-works/pi-agent-core": "^0.79.8",
-    "@earendil-works/pi-ai": "^0.79.8",
-    "@earendil-works/pi-coding-agent": "^0.79.8",
+    "@earendil-works/pi-agent-core": "^0.83.0",
+    "@earendil-works/pi-ai": "^0.83.0",
+    "@earendil-works/pi-coding-agent": "^0.83.0",
     "typebox": ">=1.1.24 <2.0.0"
   },
   "devDependencies": {
