@@ -33,6 +33,5 @@
     "extensions": [
       "./index.ts"
     ]
-  },
-  "packageManager": "pnpm@11.20.0"
+  }
 }
