@@ -1,5 +1,9 @@
 {
-  "$schema": "https://unpkg.com/knip@5/schema.json",
-  "ignore": ["tests/**", "scripts/**"],
-  "ignoreDependencies": ["@earendil-works/pi-server"]
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "tests/**/*.test.ts",
+    "__tests__/**/*.test.ts",
+    "scripts/**/*.ts",
+    "stress-*.ts"
+  ]
 }

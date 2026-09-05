@@ -22,7 +22,7 @@ interface BlockCounts {
   thinking: number;
 }
 
-export interface RecallProbe {
+interface RecallProbe {
   label: string;
   sourceText: string;
   query: string;

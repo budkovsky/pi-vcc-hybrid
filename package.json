@@ -1,6 +1,6 @@
 {
   "name": "@monotykamary/pi-vcc",
-  "version": "0.8.7",
+  "version": "0.8.8",
   "description": "Algorithmic conversation compactor for pi - transcript-preserving structured summaries, no LLM calls",
   "main": "index.ts",
   "keywords": [
@@ -21,14 +21,17 @@
     "typebox": ">=1.1.24 <2.0.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-server": "0.85.0",
     "@types/node": "^26.0.0",
     "knip": "6.14.1",
-    "typescript": "6.0.3"
+    "typescript": "6.0.3",
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "vitest": "4.1.7"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "lint:dead": "knip"
+    "lint:dead": "knip",
+    "test": "PI_FABRIC_COMPACTION_ENGINE= bun test ./tests --path-ignore-patterns '**/real-sessions.test.ts' && bun run test:regression",
+    "test:regression": "vitest run __tests__"
   },
   "pi": {
     "extensions": [

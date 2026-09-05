@@ -17,7 +17,7 @@ import type { PiVccCompactionDetails } from "../details";
 
 export const PI_VCC_COMPACT_INSTRUCTION = "__pi_vcc__";
 
-export interface CompactionStats {
+interface CompactionStats {
   summarized: number;
   kept: number;
   keptTokensEst: number;
@@ -115,7 +115,7 @@ const isHiddenEmptyCustomMessage = (message: unknown): boolean => {
   );
 };
 
-export type OwnCutCancelReason =
+type OwnCutCancelReason =
   | "no_live_messages"
   | "too_few_live_messages";
 

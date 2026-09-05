@@ -62,37 +62,6 @@ export function makeAssistantEntry(
   };
 }
 
-export function makeToolResultEntry(
-  toolCallId: string,
-  content: string,
-  overrides?: Partial<MockEntry>,
-): MockEntry {
-  const id = makeId();
-  return {
-    type: "message",
-    id,
-    message: {
-      role: "toolResult",
-      content: [{ type: "toolResult", toolCallId, content }],
-    },
-    ...overrides,
-  };
-}
-
-export function makeCompactionEntry(
-  firstKeptEntryId: string,
-  overrides?: Partial<MockEntry>,
-): MockEntry {
-  const id = makeId();
-  return {
-    type: "compaction",
-    id,
-    firstKeptEntryId,
-    summary: "Compaction summary",
-    ...overrides,
-  };
-}
-
 /**
  * Build a context snapshot dict matching Agent.state.messages shape.
  * Used for testing the "continue from assistant message" scenarios.
