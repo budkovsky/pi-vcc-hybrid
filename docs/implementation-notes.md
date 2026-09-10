@@ -436,3 +436,50 @@ Done 2026-09-10 on branch `feat/semantic-layer`.
 - Phase 6 (6a+6b) is complete. Remaining: Phase 7a manual validation
   (the real DoD gate — live pi session, paraphrase recall, value proof vs
   `vcc_recall`) and 7b tuning matrix.
+
+## Phase 7a
+
+Done 2026-09-10 on branch `feat/semantic-layer`. The DoD gate: a **real** pi
+session (SDK, hermetic agentDir) driven past the compaction threshold, with
+the planted fact recalled through the semantic layer only.
+
+- **`scripts/validate-phase7a.ts`** (+ `validate-phase7a-helpers.ts`) —
+  scripted runbook (`scripts/manual-validation.md`). Hermetic
+  `PI_CODING_AGENT_DIR` (temp agentDir with its own `models.json` pointing at
+  the homelab vLLM endpoint, `P7A_MODEL` override), real
+  `~/.pi/vector/<sessionId>/`, real qmd daemon (reused if up, else spawned).
+  Exit 0 = all 6 items pass; evidence →
+  `docs/validation/phase7a-evidence.md`.
+- **Result (2026-09-10, `homelab-vllm/qwen38`, wall 249.9s): all 6 PASS.**
+  Compaction 9ms (no LLM), 8 chunks + meta.json, no indexer.log,
+  paraphrase → semantic_recall 3/3 tokens, vcc_recall 0/3 (value proof),
+  spontaneous call on the follow-up turn with the correct answer.
+- **The planted fact must not leak through the model's own replies.** The
+  task-boundary cut keeps the last turn, so any turn *containing* the fact
+  (a tool result, or the model quoting it verbatim) stays live until a later
+  compaction trims it. Two design consequences, both learned the hard way:
+  (1) the value proof (item 5) runs **before** the semantic hit (item 4) so
+  the model hasn't seen the fact yet; (2) a filler turn + compaction is
+  inserted before item 6, with a **pre-check** that the fact is actually out
+  of the live context (the compaction may still be in flight / unflushed).
+- **SDK sessions don't fire `session_start`** — `createAgentSession` skips
+  `bindExtensions()`. Call `await session.bindExtensions({})` after
+  creation to get the daemon warmup exactly like the TUI; otherwise the
+  daemon is spawned lazily on the first `semantic_recall` (works, but the
+  first query pays the cold model-load: ~2.5 min observed vs fast when warm).
+- **The proactive hook fires `ctx.compact()` on `agent_end`** — *after*
+  `prompt()` resolves. Quiesce after each prompt (grace + wait for in-flight
+  compactions) and retry on "compaction is in progress".
+- **The session file lags in-memory state** — poll the JSONL for the
+  compaction entry; don't read once. Duration is measured from file
+  timestamps (preceding entry → compaction append), not from event
+  wall-clock (an aborted compaction can fire `compaction_start` after the
+  end that set the baseline, producing negative durations).
+- **Compaction summaries elide long verbatim content** — a fact quoted in a
+  trimmed turn does not survive into the next VCC summary (verified across
+  runs). If it ever does, the item-6 pre-check catches the contamination.
+- **Count tool calls within the turn, not across the live context** — a
+  compaction between two measurements can trim the baseline call out and
+  break a before/after count comparison.
+- **Gate:** full suite green unchanged (603 unit + 27 regression),
+  typecheck + knip clean. No new deps.
