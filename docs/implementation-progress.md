@@ -26,10 +26,10 @@ default branch = `develop` (at `98fd534`, v0.8.8 = latest upstream). Work branch
 
 ## Phase 1 — `paths.ts` + `config.ts`
 
-- [ ] `tests/semantic/paths.test.ts` + `config.test.ts` written red
-- [ ] `paths.ts`: `chunkDir` / `indexName`, sessionId sanitization (no `/`, no `..`, length cap)
-- [ ] `config.ts`: defaults (`enabled:true, chunkTokens:1500, limit:5, mode:"vsearch"`), settings merge, env override, invalid → default + warning
-- [ ] Full suite green
+- [x] `tests/semantic/paths.test.ts` + `config.test.ts` written red (43 tests)
+- [x] `paths.ts`: `chunkDir` / `collectionName` (plan's `indexName` → collection per Phase-0 daemon decision) + `SHARED_INDEX_NAME` constant; sessionId sanitization (no `/`, no `..`, charset `[A-Za-z0-9_-]`, 64-char cap, `"default"` fallback)
+- [x] `config.ts`: defaults (`enabled:true, chunkTokens:1500, limit:5, mode:"vsearch", gpu:"cpu", indexName:"pi-semantic", daemonPort:8390, keepOnShutdown:false`), `semantic` key merge from pi-vcc config file, env override (`PI_SEMANTIC_*`), invalid → default + warning, never throws
+- [x] Full suite green (2026-09-10: 434 unit + 27 regression; typecheck + knip clean)
 
 ## Phase 2 — `chunk.ts`
 
