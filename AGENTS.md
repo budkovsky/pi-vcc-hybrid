@@ -35,7 +35,7 @@ Green gate: a phase is done only when the **entire** suite (inherited pi-vcc tes
 Applies to **new code** (`src/semantic/` and new wiring). The inherited VCC core is untouched per the layout rules above and is exempt.
 
 - **File/class < 300 lines** (raw `wc -l`). One concern per file; when a file grows past ~250 lines, split it before adding more.
-- **Function/method < 50–70 lines.** If a function is growing past ~50, extract helpers or split by case (e.g. one small serializer per message role, not one role-dispatch function).
+- **Function/method < 60 lines.** If a function is growing past ~50, extract helpers or split by case (e.g. one small serializer per message role, not one role-dispatch function).
 - **Prefer more, smaller files over complex functions** — smaller units are easier to test (red-first TDD) and to review.
 - Exceptions only when genuinely necessary (e.g. a state machine that must stay inline); record the exception + rationale in `docs/implementation-notes.md`.
 - Known exception (do not follow its lead): `src/semantic/chunk.ts` (Phase 2) is 460 lines with two ~93-line functions (`messageParts`, `chunkSpan`) — accepted as-is; if Phase 6b reworks it, split it then.
