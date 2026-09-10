@@ -168,3 +168,57 @@ Done 2026-09-10 on branch `feat/semantic-layer`.
 - Carried into Phase 5: indexer writes `NNNN.md` = `header + "\n\n" + text`,
   passes `startSeq = meta.lastSeq + 1`; `parseHeader` is the Phase-4
   provenance parser's source (header → turn/ts/files).
+
+## Phase 3
+
+Done 2026-09-10 on branch `feat/semantic-layer`.
+
+- **Three files** (golden rules: <300 lines each — 124/133/230):
+  - `qmd-cli.ts` — `QmdError` (codes: `cli-failed` / `timeout` /
+    `daemon-unreachable` / `daemon-error` / `bad-response`); argv builders
+    (exact Phase-0 shapes, asserted in tests); `qmdEnv` (`cpu`|`auto` →
+    `QMD_FORCE_CPU=1`, `force` → none); `execQmd` real spawn — resolves with
+    the exit code (the caller interprets it), rejects only on spawn failure or
+    timeout; stdout/stderr kept separate (vsearch contract).
+  - `qmd-daemon.ts` — `queryBody` (JSON-RPC `tools/call` `query`; mode
+    `vsearch` → `searches:[{type:"vec"}]`, mode `query` → auto-expansion
+    `query` field; **`rerank:false` mandatory**; `collections` omitted when
+    empty — the warmup query); `checkHealth` (200 + `{status:ok}` → true,
+    never throws); `queryDaemon` (SSE `data:` line parse, CRLF + keepalive
+    tolerant, plain-JSON fallback; JSON-RPC error → `daemon-error`; missing
+    `structuredContent.results` → `bad-response`; network/HTTP/timeout →
+    `daemon-unreachable`; non-object / non-numeric-score entries skipped).
+  - `qmd.ts` — `QmdBackend`: CLI indexing (`collection add`/`remove`
+    idempotent via exit codes — 1 = exists/missing → ok; `embed`: any
+    non-zero → error), daemon lifecycle, `search`.
+- **Contract amendments (user decisions 2026-09-10, supersede plan §0c):**
+  1. `search` returns **`QmdRawHit[]`** (raw daemon entries: docid/file/
+     title/score/line/snippet), not `Hit[]`. Hit shaping (read the local
+     chunk file → full text + header → provenance) moves to Phase 4
+     `recall.ts`. Rationale: keep qmd.ts a pure qmd-interaction module.
+  2. **Full daemon lifecycle lives in Phase 3** (`ensureDaemon` /
+     `stopDaemon`), not Phase 6 — Phase 6 only decides *when* to start/stop.
+- **Daemon lifecycle semantics:** `ensureDaemon` — in-flight guard is set
+  *synchronously* (before the health await) so concurrent callers share one
+  start; healthy → reuse with **no warmup** (warmup belongs to spawn);
+  down → spawn (exact argv) → poll `/health` (`healthPollMs` until
+  `healthTimeoutMs`) → fire warmup (throwaway vec query, `rerank:false`,
+  **never awaited** — the one-time model load spans the first queries;
+  failure → `log`, never thrown). `stopDaemon` exit 1 = not running → ok.
+- **Timeouts:** `DEFAULT_TIMEOUT_MS` = 30s (collection ops, spawn/stop,
+  search), `EMBED_TIMEOUT_MS` = 600s (≈0.2s/chunk CPU; 3000 chunks). Open
+  point for Phase 6: `search` reuses `timeoutMs` as the daemon-query timeout —
+  a query spanning the model load can exceed 30s; the wiring may want a
+  dedicated (longer) search timeout.
+- **Integration (`RUN_QMD=1`):** throwaway index `pi-sem-it-<ts>` on port
+  8391, 3 filler+fact chunks; paraphrase "when does the nightly backup run"
+  → top hit `itsess/0003.md` ✓ (the 03:15 UTC fact); collection isolation ✓.
+  Cleanup best-effort: `stopDaemon` + `collection remove` + rm the index
+  sqlite sidecars (no `qmd index remove` in the contract).
+- **Gate:** 527 unit + 27 regression green (was 470+27), typecheck + knip
+  clean.
+- Carried into Phase 4: `QmdRawHit.file` = `"<collection>/<NNNN.md>"` → seq;
+  provenance from the chunk-file header (`chunk.ts` `parseHeader`); `[]` →
+  friendly "index catching up" message at the tool layer (degraded, not
+  broken); backend defaults are neutral (limit 5 / mode vsearch) — config
+  values are applied by the Phase-6 wiring.
