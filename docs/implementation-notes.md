@@ -381,3 +381,58 @@ Done 2026-09-10 on branch `feat/semantic-layer`.
   genuine pi message shapes — the expected rework point). The open
   search-timeout question from Phase 3 (model-load-spanning query vs. 30s
   `timeoutMs`) remains open — recall's `search` uses `DEFAULT_TIMEOUT_MS`.
+
+## Phase 6b
+
+Done 2026-09-10 on branch `feat/semantic-layer`.
+
+- **`tests/semantic/real-pipeline.test.ts`** (10 tests) — the
+  fixture-vs-reality gate. Fixtures: `prepareSessionSamples(3)` +
+  `loadSessionMessages` (same support helpers as the inherited
+  `real-sessions.test.ts` — the 3 largest local session JSONLs, copied
+  read-only to tmpdir). Pipeline: JSONL → pi-native messages → `chunkSpan`
+  → `indexSpan` (fake backend, tmp `vectorRoot`).
+- **The reassembly invariant** (the heart of the test): chunk texts must
+  reassemble *byte-for-byte* to `messages.flatMap(m => messageLines(m,
+  chunkTokens))` — the exact per-message line list the packer consumes.
+  This one assertion covers message boundaries (no message split across
+  chunks), no content loss/reorder, oversized-part splitting, and thinking
+  omission (the reference never emits thinking lines).
+- **Chunker rework: minimal.** The Phase-2 shape assumptions (content
+  arrays with text/thinking/toolCall/image parts, toolResult as a message
+  with `toolName`/`content[]`/`isError`, `bashExecution` synthetic role)
+  matched the genuine pi shapes — cross-checked against the pi-ai type
+  definitions and the VCC core's `normalize()`. Only change to `chunk.ts`:
+  **export `messageLines`** (was private) so the test can state the
+  reassembly invariant. No logic changed.
+- **Corpus verification before pinning** (throwaway probes, not committed):
+  all 610 local sessions / 32,605 messages pass every invariant
+  (reassembly, ≤ chunkTokens, no empty chunks/lines, contiguous seq,
+  monotonic turn, header round-trip) — filtered *and* unfiltered message
+  lists (the hook passes unfiltered: `custom` ×11 and
+  `compactionSummary` ×104 roles occur in the wild; both are dropped
+  cleanly, same as VCC `normalize`). Real-shape census: thinking ×13,870,
+  toolCall ×16,029, toolResult text ×16,076, toolResult **image** ×2
+  (placeholder path exercised), string-content user messages,
+  `bashExecution` ×4.
+- **Probe gotcha (why the invariant uses `messageLines`, not
+  `serializeMessages`):** `serializeMessages` does *not* split oversized
+  parts, so as a reference it produced 19/610 false "line-preservation
+  failures" (all on sessions with >6k-char user prompts). The chunker was
+  right; the reference was wrong.
+- **`turn=0` is valid, not a bug:** a span that starts mid-turn
+  (assistant/toolResult first — happens with orphan-recovery / mid-cycle
+  cuts) yields `turn=0` chunks. Consistent with the Phase-2 pinned
+  definition ("count of user messages up to the chunk's first message");
+  turn is span-relative provenance, not a global turn number. Documented
+  in the test.
+- **Synthetic edge-shape tests** pin the corpus's rare shapes
+  deterministically (thinking+text+toolCall assistant, toolResult with
+  image part, user array content, `bashExecution`, `custom`/
+  `compactionSummary` dropped) so coverage doesn't depend on which
+  sessions happen to be largest at run time.
+- **Gate:** 607 unit + 27 regression green (was 597+27; +10 new),
+  typecheck + knip clean.
+- Phase 6 (6a+6b) is complete. Remaining: Phase 7a manual validation
+  (the real DoD gate — live pi session, paraphrase recall, value proof vs
+  `vcc_recall`) and 7b tuning matrix.
