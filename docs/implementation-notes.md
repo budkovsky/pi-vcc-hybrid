@@ -88,3 +88,36 @@ Done 2026-07-10 on branch `phase0` → `feat/semantic-layer` (commit
     rather than a per-session index dir/name — adjust Phase 1 test names
     accordingly (`chunkDir` stays; `indexName` becomes `collectionName` +
     constant shared index name)
+
+## Phase 1
+
+Done 2026-09-10 on branch `feat/semantic-layer`.
+
+- **`src/semantic/paths.ts`** — `sanitizeSessionId` is the single choke point
+  for every sessionId that touches paths/collections/args: trim → collapse
+  runs of `[^A-Za-z0-9_-]` to one `_` (dots are not in the safe set, so `..`
+  can never survive) → 64-char cap (trailing `_` trimmed) → `"default"`
+  fallback. `chunkDir(id, root?)` → `~/.pi/vector/<id>` (root injectable for
+  tests); `collectionName(id)` = sanitized id; `SHARED_INDEX_NAME =
+  "pi-semantic"`.
+- **`src/semantic/config.ts`** — `resolveSemanticConfig({file, env, warn})` is
+  pure (all three injectable); `loadSemanticConfig()` wraps it with disk +
+  `process.env`. Precedence: env > file > defaults. Invalid value → default +
+  warning via injected `warn` (default `console.warn`), **never throws**.
+- **Config lives in the `semantic` key of the pi-vcc config file**
+  (`PI_VCC_CONFIG_PATH ?? <agentDir>/pi-vcc-config.json`) — one config file
+  for the user; the module only uses the public `getAgentDir` peer-dep API,
+  no pi-vcc internal imports. Mirrors the `PI_VCC_CONFIG_PATH` test pattern
+  already used by the inherited suite.
+- **Defaults pinned** (closes Phase-0 open points): shared index
+  `pi-semantic`, daemon port **8390**, `gpu: "cpu"` (→ `QMD_FORCE_CPU=1`),
+  `mode: "vsearch"` (daemon `vec` query; `"query"` = hybrid+expansion,
+  slower), `keepOnShutdown: false` (Phase 6 will consume it).
+- **Env overrides:** `PI_SEMANTIC_ENABLED` (0/1/true/false),
+  `PI_SEMANTIC_CHUNK_TOKENS`, `PI_SEMANTIC_LIMIT`, `PI_SEMANTIC_MODE`,
+  `PI_SEMANTIC_GPU`. (indexName/daemonPort/keepOnShutdown are file-only —
+  add env vars only if a later phase needs them.)
+- Validation ranges: chunkTokens 100–50000 int, limit 1–100 int, daemonPort
+  1–65535 int, indexName sanitized (warn if changed).
+- Gate: 434 unit + 27 regression green (baseline was 391+27), typecheck +
+  knip clean.
