@@ -1,0 +1,10 @@
+[
+  {
+    "docid": "#cc4b0b",
+    "score": 0.53,
+    "file": "qmd://probe/doc1.md?index=probe-1789063789",
+    "line": 161,
+    "title": "doc1",
+    "snippet": "@@ -160,3 @@ (159 before, 0 after)\n\nThe secret password for the vault is blue zebra 42.\n"
+  }
+]
