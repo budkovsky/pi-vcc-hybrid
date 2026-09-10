@@ -10,7 +10,7 @@ A hybrid context-management extension for **pi**: proven **deterministic VCC com
 
 Repo: GitHub fork `budkovsky/pi-vcc-hybrid` of `monotykamary/pi-vcc` (baseline v0.8.8); default branch is `develop` — all work branches off it.
 
-Key docs: `docs/plan/hybrid-recall-spec.md` (spec), `docs/plan/hybrid-recall-implementation-plan.md` (TDD phases 0–7, data contracts, risks), `docs/implementation-progress.md` (checklist — the single source of truth for what is done; mark items `[x]` as they are completed, one phase at a time, in order).
+Key docs: `docs/plan/hybrid-recall-spec.md` (spec), `docs/plan/hybrid-recall-implementation-plan.md` (TDD phases 0–7, data contracts, risks), `docs/implementation-progress.md` (checklist — the single source of truth for what is done; mark items `[x]` as they are completed, one phase at a time, in order), `docs/implementation-notes.md` (running notes — key decisions with rationale, measured numbers, gotchas, open design points; read before starting a phase, append as you go), `docs/qmd-contract.md` (pinned qmd CLI/daemon contracts from the Phase 0 probe — the shapes Phases 3–4 assert against).
 
 ## Commands (bun, not npm)
 
