@@ -71,8 +71,8 @@ default branch = `develop` (at `98fd534`, v0.8.8 = latest upstream). Work branch
 
 ### 6b — Real-shape pipeline test
 
-- [ ] Real session JSONL fixture → convertToLlm → chunker → indexer (fake backend) pipeline test
-- [ ] Chunker rework from real message shapes (expected) — suite green again
+- [x] Real session JSONL fixture → chunker → indexer (fake backend) pipeline test — `tests/semantic/real-pipeline.test.ts` (10 tests: fixture sanity, chunker invariants on real data, indexer pipeline, synthetic edge shapes) (2026-09-10)
+- [x] Chunker rework from real message shapes (expected) — rework turned out minimal: `messageLines` exported as the test's reassembly reference; chunker logic unchanged (corpus-verified against 610 real sessions / 32.6k messages) — suite green again (2026-09-10)
 
 ## Phase 7 — Manual validation
 

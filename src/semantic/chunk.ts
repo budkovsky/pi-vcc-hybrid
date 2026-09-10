@@ -276,9 +276,10 @@ export function serializeMessages(messages: Message[]): string[] {
 /**
  * Lines for one message, with oversized parts split so every line is
  * ≤ chunkTokens (estimator). Splits on the raw text (paragraph → line →
- * hard-cut) before collapsing.
+ * hard-cut) before collapsing. Exported: the pipeline test asserts chunk
+ * texts reassemble to `messages.flatMap(messageLines)` exactly.
  */
-function messageLines(msg: Message, chunkTokens: number): string[] {
+export function messageLines(msg: Message, chunkTokens: number): string[] {
   const lines: string[] = [];
   for (const part of messageParts(msg)) {
     const budgetChars = Math.max(chunkTokens * 4 - part.prefix.length, 1);
