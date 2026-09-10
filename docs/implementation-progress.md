@@ -12,17 +12,17 @@ default branch = `develop` (at `98fd534`, v0.8.8 = latest upstream). Work branch
 
 - [x] Fork `monotykamary/pi-vcc` on GitHub → `budkovsky/pi-vcc-hybrid`, cloned locally
 - [x] `upstream` remote — **not needed** (decision 2026-07-10: fork is standalone, no upstream pulls planned)
-- [ ] `bun install` + full suite green → baseline commit, tagged `base-v0.8.8` (suite verified green 2026-07-10: 391 unit + 27 regression pass, typecheck clean; bun 1.4.2 installed; tag pending)
-- [ ] Peer-dep/import names verified against installed pi (`@earendil-works/…` + `typebox`)
-- [ ] Dev tooling bootstrapped if missing (vitest + typescript devDeps, test/typecheck scripts, tsconfig)
-- [ ] `scripts/qmd-probe.sh` run: collection add → embed → vsearch end-to-end on 3 dummy files
-- [ ] `vsearch --format json` schema captured → `tests/semantic/fixtures/vsearch-sample.json`
-- [ ] CPU vs GPU timing per chunk measured (`QMD_FORCE_CPU=1`)
-- [ ] Per-session `--index` overhead measured (file size, startup)
-- [ ] **Recall-latency decision gate:** accept ~5s/call vs. `qmd mcp --http --daemon` (resident) — decision recorded
-- [ ] Daemon ↔ index isolation probed (if daemon chosen: shared index + per-session collections)
-- [ ] Findings recorded in `docs/qmd-contract.md`
-- [ ] Branch `feat/semantic-layer` created
+- [x] `bun install` + full suite green → baseline, tagged `base-v0.8.8` (re-verified 2026-07-10: 391 unit + 27 regression pass, typecheck + knip clean; tag on develop HEAD `2cc5650`)
+- [x] Peer-dep/import names verified against installed pi — only `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, `typebox` + node builtins; all resolve in node_modules
+- [x] Dev tooling already present in fork (vitest 4.1.7, typescript 6.0.3, tsconfig, test/typecheck scripts) — no bootstrap needed
+- [x] `scripts/qmd-probe.sh` written + run: collection add → embed → vsearch end-to-end on 3 dummy files (re-runnable)
+- [x] `vsearch --format json` schema captured → `tests/semantic/fixtures/vsearch-sample.json`
+- [x] CPU timing per chunk measured (`QMD_FORCE_CPU=1`): embed ≈0.2s/chunk; vsearch 1–6s warm / ~24s cold. **GPU not measured** — GPU saturated (15.8/16.3GB) with OOM contention risk; CPU-only is the contract
+- [x] Per-session `--index` overhead measured: ~3.3MB fixed + ~5KB/chunk sqlite; startup (no model load) <0.1s
+- [x] **Recall-latency decision gate: DAEMON chosen** (user-approved) — `qmd mcp --http --daemon`, ~30ms steady-state vs 1–6s CLI; **`rerank:false` mandatory** (default rerank ≈30s/query on CPU)
+- [x] Daemon ↔ index isolation probed: one daemon = one index → **shared index + per-session collections** (`collections` filter in `query`); lifecycle pinned (spawn/health/stop `--index`)
+- [x] Findings recorded in `docs/qmd-contract.md`
+- [x] Branch `feat/semantic-layer` created (off phase0 HEAD, which is develop + Phase 0 artifacts)
 
 ## Phase 1 — `paths.ts` + `config.ts`
 
