@@ -7,3 +7,7 @@ run_compare.ts
 .pi-mux-state.json
 research/
 demo.cast
+
+# JetBrains IDEs
+.idea/
+*.iml
