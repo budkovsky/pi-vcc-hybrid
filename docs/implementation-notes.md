@@ -121,3 +121,46 @@ Done 2026-09-10 on branch `feat/semantic-layer`.
   1–65535 int, indexName sanitized (warn if changed).
 - Gate: 434 unit + 27 regression green (baseline was 391+27), typecheck +
   knip clean.
+
+## Phase 2
+
+Done 2026-09-10 on branch `feat/semantic-layer`.
+
+- **Input shape deviation from plan (expected, plan §6b anticipated it):**
+  this fork eliminated `convertToLlm()` (see README) — the trimmed span is
+  pi-native `Message[]` (user / assistant / toolResult, plus the synthetic
+  `bashExecution` role the VCC `normalize()` handles). `chunk.ts` consumes
+  that shape directly; no conversion layer.
+- **API:** `chunkSpan({ sessionId, messages, chunkTokens, startSeq? }) →
+  Chunk[]` (contract §0c), plus exported `estimateTokens`,
+  `serializeMessages`, `splitTextToBudget`, `parseHeader`,
+  `TRUNCATION_MARKER`. Pure + deterministic; no I/O, no deps beyond
+  `paths.sanitizeSessionId`.
+- **Packing:** greedy at message boundaries; a chunk's token cost is
+  `estimateTokens(lines.join("\n"))` (join newlines counted — a per-line sum
+  would undercount by 1 token per join). An item whose lines exceed the
+  budget gets its own chunk(s) and is never mixed with other messages.
+- **Oversized-message split order:** paragraph (`\n\n`) → line (`\n`) →
+  hard cut. Hard cuts: cutLen = budget − marker, marker `…[truncated]` on
+  every piece except the last; cut position is surrogate-pair-safe
+  (never between the two code units of an astral char). Budgets are in
+  code units (chars/4 convention), and the prefix length is reserved so
+  `estimateTokens(prefix + piece) ≤ chunkTokens` holds exactly.
+- **Serialization:** one line per role prefix; newlines collapse to spaces;
+  thinking blocks omitted; tool args line = `path=` / `command=` /
+  `query=` / key-list with the *value* truncated to 200ch (not the whole
+  line); tool results truncated to 2000ch with `[ERROR] ` prefix on
+  isError; a toolCall with empty args still emits `[tool: <name>]` (the
+  call itself is a recallable fact).
+- **Header:** `<!-- pi-semantic session=<sanitized> seq=<n> turn=<t>
+  ts=<iso|unknown> files=<a,b,c> -->`; commas inside file paths are escaped
+  as `;` (reversed by `parseHeader`); files capped at 10, first-seen order,
+  from `path`/`file_path`/`filePath`/`file` args only (commands are not
+  files). `turn` = count of user messages up to the chunk's first message
+  (resets per compaction span — `ts` disambiguates across spans). Missing
+  timestamp → `"unknown"` (keeps determinism).
+- **Gate:** 470 unit + 27 regression green (was 434+27), typecheck +
+  knip clean.
+- Carried into Phase 5: indexer writes `NNNN.md` = `header + "\n\n" + text`,
+  passes `startSeq = meta.lastSeq + 1`; `parseHeader` is the Phase-4
+  provenance parser's source (header → turn/ts/files).

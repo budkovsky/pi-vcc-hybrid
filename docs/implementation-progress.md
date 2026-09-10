@@ -33,9 +33,9 @@ default branch = `develop` (at `98fd534`, v0.8.8 = latest upstream). Work branch
 
 ## Phase 2 — `chunk.ts`
 
-- [ ] `tests/semantic/chunk.test.ts` written red (empty span, 1-chunk, boundaries, header format, determinism, estimator edges)
-- [ ] `chunk.ts`: message-boundary chunking ≤ `chunkTokens` (chars/4), stable parseable header, byte-identical determinism
-- [ ] Full suite green
+- [x] `tests/semantic/chunk.test.ts` written red (empty span, 1-chunk, boundaries, header format, determinism, estimator edges) — 36 tests
+- [x] `chunk.ts`: message-boundary chunking ≤ `chunkTokens` (chars/4), stable parseable header, byte-identical determinism
+- [x] Full suite green (2026-09-10: 470 unit + 27 regression; typecheck + knip clean)
 
 ## Phase 3 — `qmd.ts` backend
 
