@@ -39,10 +39,13 @@ default branch = `develop` (at `98fd534`, v0.8.8 = latest upstream). Work branch
 
 ## Phase 3 — `qmd.ts` backend
 
-- [ ] `tests/semantic/qmd.test.ts` written red (fake exec: idempotent ensureIndex, exact argv, `QMD_FORCE_CPU=1`, error handling)
-- [ ] `qmd.ts`: `QmdBackend` (ensureIndex / embed / search / remove), argv-array only (no shell string)
-- [ ] `qmd.integration.test.ts` (skipped unless `RUN_QMD=1`)
-- [ ] Full suite green
+- [x] `tests/semantic/qmd-cli.test.ts` + `qmd-daemon.test.ts` + `qmd.test.ts` written red (57 unit tests: fake exec + fake fetch; real-spawn paths tested against a fake qmd binary in a tmpdir)
+- [x] `qmd-cli.ts`: `QmdError` (structured codes), exact argv builders, `qmdEnv` (`QMD_FORCE_CPU=1` unless `gpu:"force"`), `execQmd` real spawn (streams separate, timeout → `QmdError`)
+- [x] `qmd-daemon.ts`: daemon HTTP client — `queryBody` (JSON-RPC, **`rerank:false` mandatory**, 2025 protocol), SSE parse, `checkHealth` (never throws), `queryDaemon` → raw hits
+- [x] `qmd.ts`: `QmdBackend` — CLI indexing (ensureIndex / embed / remove, exit-code idempotency) + full daemon lifecycle (ensureDaemon: health→reuse | spawn→poll→warmup-not-awaited; stopDaemon) + `search` (raw hits)
+- [x] **Contract amendment (user-approved 2026-09-10):** `search` returns `QmdRawHit[]` (raw daemon entries), not §0c `Hit[]` — Hit shaping (chunk-file read + header → provenance) moves to Phase 4; daemon lifecycle lives in Phase 3, not 6
+- [x] `qmd.integration.test.ts` (skipped unless `RUN_QMD=1`): real qmd, throwaway index, 3 chunks, paraphrased query → right chunk top hit, collection isolation — **verified 2026-09-10 (2 pass, 6.6s warm)**
+- [x] Full suite green (2026-09-10: 527 unit + 27 regression; typecheck + knip clean)
 
 ## Phase 4 — `recall.ts` + `semantic_recall` tool
 
