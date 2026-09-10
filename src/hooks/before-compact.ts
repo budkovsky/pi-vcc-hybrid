@@ -14,6 +14,8 @@ import { triggerInvisibleContinue } from "../core/invisible-continue";
 import { isProactiveTriggerActive } from "./proactive-threshold";
 import { countPiVccCompactionsFromSession, ordinalSuffix } from "../core/compaction-count";
 import type { PiVccCompactionDetails } from "../details";
+// Semantic layer wiring (Phase 6a) — the only semantic imports this file has.
+import { indexTrimmedSpan, type SemanticHookOptions } from "../semantic/hook-bridge";
 
 export const PI_VCC_COMPACT_INSTRUCTION = "__pi_vcc__";
 
@@ -459,7 +461,10 @@ export function shouldTriggerResumeForCompaction(
   return !sessionIsIdle;
 }
 
-export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
+export const registerBeforeCompactHook = (
+  pi: ExtensionAPI,
+  opts?: { semantic?: SemanticHookOptions },
+) => {
   pi.on("session_before_compact", (event, ctx) => {
     // pi-fabric may run before pi-vcc and mark the shared event after claiming it.
     if ((event as any)._fabricCompaction === true) return;
@@ -654,6 +659,14 @@ export const registerBeforeCompactHook = (pi: ExtensionAPI) => {
     };
 
     const summary = compile(compileInput);
+
+    // Semantic layer (Phase 6a): fire-and-forget vector indexing of the
+    // trimmed span. Never blocks or breaks compaction (see hook-bridge).
+    indexTrimmedSpan(
+      opts?.semantic,
+      (ctx as any)?.sessionManager?.getSessionId?.() ?? "default",
+      agentMessages,
+    );
 
     const branchIds = branchEntries.map((e: any) => e.id);
     const cutIdx = branchIds.indexOf(firstKeptEntryId);

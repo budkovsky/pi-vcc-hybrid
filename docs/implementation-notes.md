@@ -316,3 +316,68 @@ Done 2026-09-10 on branch `feat/semantic-layer`.
   *sanitized* sessionId — multi-session safe, but unbounded (one small
   state object per session per pi process; acceptable, noted for the
   Phase-6 `session_shutdown` cleanup to also drop the state entry).
+
+## Phase 6a
+
+Done 2026-09-10 on branch `feat/semantic-layer`.
+
+- **Wiring shape:** the inherited `before-compact.ts` gets exactly one
+  semantic import (`hook-bridge`) and one call site — after
+  `compile(compileInput)`, before the `return`:
+  `indexTrimmedSpan(opts?.semantic, sessionId, agentMessages)`.
+  `registerBeforeCompactHook(pi)` gains an *optional* second arg
+  `{ semantic?: SemanticHookOptions }` — back-compatible (all inherited
+  tests call it with one arg and stay green unchanged).
+- **`src/semantic/hook-bridge.ts`** (50 lines) — `indexTrimmedSpan(opts,
+  sessionId, messages)`: the only bridge from VCC hook → indexer. Total
+  function: no opts / `enabled=false` → no-op; wraps `indexSpan` in
+  try/catch (indexSpan is non-throwing by contract; the guard covers
+  unexpected sync errors) — compaction can never break because of the
+  vector index.
+- **`src/semantic/lifecycle.ts`** (95 lines) — `registerSemanticLifecycle(pi,
+  {config, backend, vectorRoot?, log?})`:
+  - `session_start` → `backend.ensureDaemon()` fire-and-forget (rejection
+    logged, never thrown).
+  - `session_shutdown` → cleanup **only when `reason === "quit"`**.
+    `keepOnShutdown=false` → `backend.remove(sessionId)` + `rm -rf` the
+    chunk dir; then `dropSessionState(sessionId)`; then `stopDaemon()`
+    (always on quit — the daemon is a detached child, stopping it so
+    quitting pi doesn't leak the process). `keepOnShutdown=true` skips
+    *both* remove and rm (collection + dir kept together).
+- **Plan deviations (all deliberate, recorded):**
+  1. **Cleanup only on `quit`** (user decision 2026-09-10). The plan says
+     "on `session_shutdown`", but pi fires that event on session
+     replacement too (`reason: "new" | "resume" | "fork"`) and on reload —
+     literal cleanup would destroy the vectors of *resumable* sessions
+     (vectors only rebuild on the next compaction, which may never come).
+     Quit-only preserves resumable-session vectors; quit still applies the
+     spec §9 "vectors don't persist across restarts" default.
+  2. **`session_start` → `ensureDaemon`, not `ensureIndex`** (plan text).
+     At session start the chunk dir doesn't exist yet (first compaction
+     creates it), so `qmd collection add` would fail; `ensureIndex` already
+     runs per-span in the indexer. `ensureDaemon` warms the one-time model
+     load (~30–67s cold) off the turn path, before the first
+     compaction/recall needs it — matches the Phase-4 "daemon start/stop
+     timing" carry-over.
+  3. **`convertToLlm` doesn't exist** in this codebase (plan §6a wording).
+     The chunker (`chunk.ts`) takes pi-native messages directly, so the
+     trimmed span (`agentMessages`) is passed as-is to `indexSpan`.
+- **`indexer.ts`** gains one export: `dropSessionState(sessionId)` — drops
+  the per-session state entry (in-flight guard + promise chain) so it
+  doesn't outlive the session. Called by the lifecycle on quit.
+- **`index.ts`** now builds one shared `QmdBackend` and passes it to all
+  three consumers (recall tool, compaction-hook indexer, lifecycle).
+  `registerBeforeCompactHook` is called with the semantic opts.
+- **Tests:** `tests/semantic/hook-wiring.test.ts` (5) +
+  `tests/semantic/lifecycle.test.ts` (8) — mock-pi pattern inherited from
+  `tests/before-compact-hook.test.ts`. Hook tests assert the *trimmed* span
+  (not the kept tail) is what lands in `NNNN.md`, and that a throwing
+  backend leaves the compaction result intact. Lifecycle tests cover
+  quit-only cleanup, keepOnShutdown, remove-failure isolation, and the
+  missing-`getSessionId` fallback.
+- **Gate:** 597 unit + 27 regression green (was 584+27; +13 new),
+  typecheck + knip clean.
+- Carried into Phase 6b: real-shape pipeline test (chunker's first look at
+  genuine pi message shapes — the expected rework point). The open
+  search-timeout question from Phase 3 (model-load-spanning query vs. 30s
+  `timeoutMs`) remains open — recall's `search` uses `DEFAULT_TIMEOUT_MS`.

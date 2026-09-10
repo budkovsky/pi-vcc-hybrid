@@ -9,25 +9,30 @@ import { registerInvisibleContinue } from "./src/core/invisible-continue";
 import { loadSemanticConfig } from "./src/semantic/config";
 import { QmdBackend } from "./src/semantic/qmd";
 import { registerSemanticRecallTool } from "./src/semantic/recall-tool";
+import { registerSemanticLifecycle } from "./src/semantic/lifecycle";
 
 export default (pi: ExtensionAPI) => {
   scaffoldSettings();
   registerInvisibleContinue(pi);
-  registerBeforeCompactHook(pi);
+
+  // Semantic layer (Phase 4/6): one shared backend for the recall tool,
+  // the compaction-hook indexer, and the lifecycle. Not active when
+  // semantic.enabled=false (each registration self-gates); the backend is
+  // lazy (no I/O until first use).
+  const semanticConfig = loadSemanticConfig();
+  const semanticBackend = new QmdBackend({
+    indexName: semanticConfig.indexName,
+    daemonPort: semanticConfig.daemonPort,
+    gpu: semanticConfig.gpu,
+  });
+
+  registerBeforeCompactHook(pi, {
+    semantic: { config: semanticConfig, backend: semanticBackend },
+  });
   registerProactiveThresholdHook(pi);
   registerPiVccCommand(pi);
   registerVccRecallCommand(pi);
   registerRecallTool(pi);
-
-  // Semantic layer (Phase 4): semantic_recall tool. Not registered when
-  // semantic.enabled=false; the backend is lazy (no I/O until first use).
-  const semanticConfig = loadSemanticConfig();
-  registerSemanticRecallTool(pi, {
-    config: semanticConfig,
-    backend: new QmdBackend({
-      indexName: semanticConfig.indexName,
-      daemonPort: semanticConfig.daemonPort,
-      gpu: semanticConfig.gpu,
-    }),
-  });
+  registerSemanticRecallTool(pi, { config: semanticConfig, backend: semanticBackend });
+  registerSemanticLifecycle(pi, { config: semanticConfig, backend: semanticBackend });
 };
