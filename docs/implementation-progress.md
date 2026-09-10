@@ -78,14 +78,14 @@ default branch = `develop` (at `98fd534`, v0.8.8 = latest upstream). Work branch
 
 ### 7a — Validation checklist (definition of done)
 
-- [ ] `scripts/manual-validation.md` runbook created
-- [ ] 1. Fork installed as pi extension; session driven past compaction threshold
-- [ ] 2. Compaction instant (no LLM), 8-section summary present
-- [ ] 3. `~/.pi/vector/<sessionId>/` populated; qmd index healthy; indexer.log empty
-- [ ] 4. Paraphrased query on trimmed-only fact → `semantic_recall` hit
-- [ ] 5. Same query via `vcc_recall` → keyword layer misses / ranks lower (value proof)
-- [ ] 6. Assistant spontaneously calls `semantic_recall` on a follow-up turn
-- [ ] Evidence recorded (timings, sample outputs)
+- [x] `scripts/manual-validation.md` runbook created (2026-09-10)
+- [x] 1. Fork installed as pi extension; session driven past compaction threshold (2026-09-10, `scripts/validate-phase7a.ts` — real SDK session, hermetic agentDir)
+- [x] 2. Compaction instant (no LLM), 8-section summary present (duration 9ms from session-file timestamps; non-empty sections rendered)
+- [x] 3. `~/.pi/vector/<sessionId>/` populated; qmd index healthy; indexer.log empty (8 chunks + meta.json; daemon answered queries; no indexer.log)
+- [x] 4. Paraphrased query on trimmed-only fact → `semantic_recall` hit (3/3 distinctive tokens in the returned chunk)
+- [x] 5. Same query via `vcc_recall` → keyword layer misses / ranks lower (value proof) (0/3 tokens — paraphrase has no keyword overlap)
+- [x] 6. Assistant spontaneously calls `semantic_recall` on a follow-up turn (fact pre-checked out of live context; 1 call in the turn; correct answer)
+- [x] Evidence recorded (timings, sample outputs) — `docs/validation/phase7a-evidence.md` (2026-09-10, wall 249.9s)
 
 ### 7b — Tuning matrix (deferrable polish, post-DoD)
 
