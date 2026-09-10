@@ -49,10 +49,10 @@ default branch = `develop` (at `98fd534`, v0.8.8 = latest upstream). Work branch
 
 ## Phase 4 — `recall.ts` + `semantic_recall` tool
 
-- [ ] `tests/semantic/recall.test.ts` written red (fixture parse, malformed/empty JSON, limit, no-hits friendly message, query sanitization, registration gating)
-- [ ] `recall.ts`: `parseVsearchJson` → `Hit[]` with provenance
-- [ ] Tool registered in `index.ts` (name, input schema, promptSnippet, promptGuidelines), session resolution from `session_start`
-- [ ] Full suite green
+- [x] `tests/semantic/recall.test.ts` written red (37 tests: seqOf parse incl. Phase-0 fixture forms, malformed header/snippet fallbacks, limit, no-hits friendly message, query sanitization, registration gating, handler session/limit/mode/error paths)
+- [x] `recall.ts`: `shapeHits`/`shapeHitsFromDisk` → `Hit[]` with provenance (plan's `parseVsearchJson` renamed — the daemon client already delivers typed `QmdRawHit[]`, so the pure unit is raw-hits → Hits); chunk-file read for full text + `parseHeader` → `"turn <t>, <iso>"`; snippet fallback (line numbers + hunk header stripped) when the file is missing
+- [x] `recall-tool.ts` + wired in `index.ts`: `semantic_recall` (name, TypeBox schema `{query, limit?}`, promptSnippet, promptGuidelines), gated by `semantic.enabled`; sessionId resolved per call from `ctx.sessionManager.getSessionId()` (deviation from plan's `session_start` module state — multi-session-safe, no state); zero hits / backend failure → friendly degraded text, never an error object
+- [x] Full suite green (2026-09-10: 568 unit + 27 regression; typecheck + knip clean)
 
 ## Phase 5 — `indexer.ts`
 
