@@ -64,10 +64,10 @@ default branch = `develop` (at `98fd534`, v0.8.8 = latest upstream). Work branch
 
 ### 6a — Hook wiring
 
-- [ ] `before-compact.ts`: after VCC summary → `convertToLlm` → `indexSpan(...)` (guarded by `semantic.enabled`)
-- [ ] `session_start` / `session_shutdown` lifecycle (ensureIndex / remove + cleanup)
-- [ ] Hook-level tests: indexSpan called with trimmed span; failure cannot break compaction
-- [ ] Full suite green
+- [x] `before-compact.ts`: after VCC summary → `indexTrimmedSpan(...)` (guarded by `semantic.enabled`; `convertToLlm` from the plan doesn't exist in this codebase — the chunker takes pi-native messages directly, so the trimmed span is passed as-is) (2026-09-10)
+- [x] `session_start` / `session_shutdown` lifecycle — `session_start` → `ensureDaemon` warmup (deviation from plan's `ensureIndex`, see notes); `session_shutdown` → cleanup **only on `reason === "quit"`** (user decision 2026-09-10: the event also fires on new/resume/fork/reload) (2026-09-10)
+- [x] Hook-level tests: indexSpan called with trimmed span; failure cannot break compaction — `tests/semantic/hook-wiring.test.ts` (5) + `tests/semantic/lifecycle.test.ts` (8) (2026-09-10)
+- [x] Full suite green (2026-09-10: 597 unit + 27 regression; typecheck + knip clean)
 
 ### 6b — Real-shape pipeline test
 

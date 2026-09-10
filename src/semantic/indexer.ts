@@ -185,6 +185,14 @@ function requestEmbed(session: string, st: SessionState, dir: string, input: Ind
 }
 
 /**
+ * Drop the per-session state entry (called on session_shutdown reason=quit
+ * so the in-flight guard / promise chain don't outlive the session).
+ */
+export function dropSessionState(sessionId: string): void {
+  sessions.delete(sanitizeSessionId(sessionId));
+}
+
+/**
  * Index a trimmed span, fire-and-forget. Returns immediately; all work
  * (chunk, write, ensureIndex, embed) happens in the background. Failures
  * are logged, never thrown.
