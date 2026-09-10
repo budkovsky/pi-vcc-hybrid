@@ -161,6 +161,10 @@ Done 2026-09-10 on branch `feat/semantic-layer`.
   timestamp → `"unknown"` (keeps determinism).
 - **Gate:** 470 unit + 27 regression green (was 434+27), typecheck +
   knip clean.
+- **Style exception (see AGENTS.md golden rules):** chunk.ts is 460 lines
+  with two ~93-line functions (`messageParts`, `chunkSpan`) — accepted
+  as-is on review 2026-09-10; rules bind new code from Phase 3 on,
+  and a Phase 6b rework of the chunker must split it.
 - Carried into Phase 5: indexer writes `NNNN.md` = `header + "\n\n" + text`,
   passes `startSeq = meta.lastSeq + 1`; `parseHeader` is the Phase-4
   provenance parser's source (header → turn/ts/files).
