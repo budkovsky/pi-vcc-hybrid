@@ -275,3 +275,44 @@ Done 2026-09-10 on branch `feat/semantic-layer`.
   (`session_start`/`session_shutdown`), the `keepOnShutdown` cleanup, and
   the open search-timeout question from Phase 3 (model-load-spanning query
   vs. 30s `timeoutMs`).
+
+## Phase 5
+
+Done 2026-09-10 on branch `feat/semantic-layer`.
+
+- **`src/semantic/indexer.ts`** (200 lines) — `indexSpan({sessionId,
+  messages, backend, chunkTokens?, vectorRoot?, log?})` returns
+  **synchronously** (latency contract: <5ms, never awaits embed); all work
+  runs in a per-session background pipeline:
+  1. **prepare** (serialized per session via a promise chain, so the
+     meta.json read-modify-write is race-free): read meta → `chunkSpan`
+     (`startSeq = lastSeq + 1`) → write `NNNN.md` for new chunks → update
+     meta.json. Sync fs in a microtask — fine at span sizes (few MB).
+  2. **embed** (coalesced, *not* serialized): `ensureIndex` → `embed`;
+     in-flight guard + pending flag (at most 1 queued). The follow-up
+     embed covers files written during the in-flight one. Files are always
+     written regardless of embed state.
+- **Idempotency key = sha1 of the chunk `text`, not the file** (deviation
+  from plan §0c's "sha1 of file"): the header embeds the seq, and seq
+  continues across compactions, so a re-compacted span would get new seqs
+  and file hashes would never collide. Text-hash dedup across *all* seqs
+  means re-compaction of the same span writes nothing and triggers no
+  embed. `meta.json` = `{ lastSeq, hashes: { "<seq>": sha1(text) } }`.
+- **Failure semantics:** any stage failure (prepare / ensureIndex / embed)
+  → line appended to `<chunkDir>/indexer.log` + injected `log` sink
+  (default `console.error`); state stays consistent (files + meta already
+  written before embed); the next span retries. `indexSpan` never throws,
+  never rejects (the chain is poison-proof via `.catch` at each link).
+- **`IndexerBackend`** is a minimal structural interface
+  (`ensureIndex`/`embed`) — `QmdBackend` satisfies it; tests use fakes.
+  `vectorRoot` injection mirrors `paths.chunkDir`/Phase-4 `recall-tool`
+  (no full `fs` injection — tmpdir is enough, consistent with Phases 1/4).
+- **Gate:** 584 unit + 27 regression green (was 568+27; +16 new),
+  typecheck + knip clean.
+- Carried into Phase 6: wiring calls `indexSpan` from `before-compact.ts`
+  after the VCC summary with `chunkTokens` from config + the shared
+  `QmdBackend`; `indexSpan`'s `log` should go to the same sink the rest
+  of the extension uses. Module-level session state is keyed by
+  *sanitized* sessionId — multi-session safe, but unbounded (one small
+  state object per session per pi process; acceptable, noted for the
+  Phase-6 `session_shutdown` cleanup to also drop the state entry).

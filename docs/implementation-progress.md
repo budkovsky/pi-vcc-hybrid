@@ -56,9 +56,9 @@ default branch = `develop` (at `98fd534`, v0.8.8 = latest upstream). Work branch
 
 ## Phase 5 — `indexer.ts`
 
-- [ ] `tests/semantic/indexer.test.ts` written red (fake backend + tmpdir: happy path, idempotent re-call, embed failure logged, single embed in flight, <5ms return)
-- [ ] `indexer.ts`: fire-and-forget `indexSpan` (write NNNN.md + meta.json → ensureIndex → embed), failures to `indexer.log`, never throw
-- [ ] Full suite green
+- [x] `tests/semantic/indexer.test.ts` written red (fake backend + tmpdir: happy path, idempotent re-call, embed failure logged, single embed in flight, <5ms return) — 16 tests
+- [x] `indexer.ts`: fire-and-forget `indexSpan` (write NNNN.md + meta.json → ensureIndex → embed), failures to `indexer.log`, never throw
+- [x] Full suite green (2026-09-10: 584 unit + 27 regression; typecheck + knip clean)
 
 ## Phase 6 — Wiring + lifecycle
 
