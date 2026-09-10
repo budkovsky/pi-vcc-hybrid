@@ -222,3 +222,56 @@ Done 2026-09-10 on branch `feat/semantic-layer`.
   friendly "index catching up" message at the tool layer (degraded, not
   broken); backend defaults are neutral (limit 5 / mode vsearch) — config
   values are applied by the Phase-6 wiring.
+
+## Phase 4
+
+Done 2026-09-10 on branch `feat/semantic-layer`.
+
+- **Two files** (golden rules — 160/107 lines):
+  - `recall.ts` — pure shaping + formatting. `seqOf` (last path segment,
+    strip `?query`, `^0*(\d+)\.md$` → seq; handles both daemon
+    `"<coll>/NNNN.md"` and CLI `qmd://…` forms); `provenanceOf` (first line →
+    `chunk.ts` `parseHeader` → `"turn <t>, <iso>"`, else `"unknown"`);
+    `textOf` (chunk-file body after the header line, else snippet with
+    `N: ` line prefixes + `@@ … @@` hunk headers stripped); `shapeHit` /
+    `shapeHits` (pure, limit-sliced, daemon rank order preserved) /
+    `shapeHitsFromDisk` (one `readFile` per distinct seq, `NNNN.md`
+    zero-padded 4, missing → null → snippet fallback); `formatHits` /
+    `emptyResult` / `unavailableResult` (pinned plan-§0c strings).
+  - `recall-tool.ts` — `registerSemanticRecallTool(pi, {config, backend,
+    vectorRoot?, readChunk?, log?})`. Gating: `semantic.enabled=false` →
+    no `registerTool` call. Handler: trim query (empty → "query is
+    required", backend untouched) → `ctx.sessionManager.getSessionId()` →
+    `backend.search(id, q, {limit, mode})` → `shapeHitsFromDisk` →
+    `formatHits` | `emptyResult`. `limit` clamped to 1–100, invalid →
+    config default. Any thrown error → `log` + `unavailableResult` text —
+    the turn is never blocked, no error object.
+- **Plan deviations (both simplify the plan's design):**
+  1. `parseVsearchJson` → `shapeHits(raw, contentBySeq, limit)`: the
+     Phase-3 daemon client already returns typed `QmdRawHit[]` (JSON parse
+     lives in `qmd-daemon.ts`), so the Phase-4 pure unit takes raw hits,
+     not a JSON string. Malformed/empty-JSON robustness is covered by the
+     Phase-3 `queryDaemon` tests + partial-field tests here.
+  2. Session resolution: the tool `execute` receives the full
+     `ExtensionContext`, so the sessionId comes from
+     `ctx.sessionManager.getSessionId()` per call — no `session_start`
+     module state, multi-session processes are safe by construction.
+- **Query sanitization proof:** test runs a real `QmdBackend` (fake
+  exec/fetch) with a shell-metachar query and asserts (a) the query arrives
+  as a literal string in the JSON-RPC `arguments.searches[0].query` and
+  (b) **zero** CLI/exec calls — recall never touches a shell.
+- **`index.ts` wiring:** `loadSemanticConfig()` at extension load →
+  `new QmdBackend({indexName, daemonPort, gpu})` (lazy — no I/O until first
+  search/ensureDaemon) → `registerSemanticRecallTool`. Config is read once
+  per pi process (restart to change — same as the rest of the extension).
+- **Gate:** 568 unit + 27 regression green (was 531+27; +37 new),
+  typecheck + knip clean. (Progress doc had recorded Phase 3 as 527 — the
+  measured baseline at the Phase-3 HEAD is 531; delta is exactly the new
+  file.)
+- Carried into Phase 5/6: `shapeHitsFromDisk` reads `NNNN.md` exactly as
+  the indexer will write it (`header + "\n\n" + text`); the tool's
+  `readChunk`/`vectorRoot` injection points are what the Phase-6 wiring
+  leaves at defaults. Phase 6 still owns: daemon start/stop timing
+  (`session_start`/`session_shutdown`), the `keepOnShutdown` cleanup, and
+  the open search-timeout question from Phase 3 (model-load-spanning query
+  vs. 30s `timeoutMs`).
