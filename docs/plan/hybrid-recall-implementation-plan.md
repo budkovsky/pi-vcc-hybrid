@@ -149,6 +149,10 @@ interface QmdBackend {  // (as in Phase 3)
   search(sessionId: string, query: string, opts?: { limit?: number; mode?: string }): Promise<Hit[]>;
   remove(sessionId: string): Promise<void>;
 }
+// ⚠ AMENDED (Phase 3, user decision 2026-09-10 — see implementation-notes.md):
+//   search returns QmdRawHit[] (raw daemon entries: docid/file/title/score/line/snippet),
+//   NOT Hit[] — Hit shaping (chunk-file read + header → provenance) lives in Phase 4 recall.ts.
+//   + ensureDaemon() / stopDaemon() added (full daemon lifecycle in Phase 3, not 6).
 
 // Phase 5 (indexer.ts)
 // meta.json in chunk dir: { "lastSeq": number, "hashes": { "<seq>": "<sha1 of file>" } }
