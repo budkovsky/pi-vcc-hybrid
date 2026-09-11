@@ -13,6 +13,66 @@ _No LLM calls — 35-99% token reduction via extraction and formatting. Same inp
 
 ---
 
+## 🍴 Fork area — pi-vcc-hybrid
+
+> **This is a fork of [monotykamary/pi-vcc](https://github.com/monotykamary/pi-vcc).** Everything below the line is the upstream README, unchanged.
+
+A **hybrid context manager** for pi: the proven deterministic VCC compaction (forked as-is — no LLM, no pause, 8-section structured summary) in the foreground, plus a **background vectorized semantic index** of the trimmed context, exposed to the assistant as a `semantic_recall` tool. After compaction, the trimmed span is chunked and embedded locally (qmd, `embeddinggemma-300M`); `semantic_recall` answers paraphrased queries that keyword search (`vcc_recall`) misses. Indexing is fire-and-forget — it never blocks a turn and degrades gracefully if the index lags.
+
+### Requirements
+
+- **pi** with `@earendil-works/pi-coding-agent` ≥ 0.85 (peer dependency)
+- **qmd** CLI in PATH — `npm i -g @tobilu/qmd` (tested with 2.8.3)
+- **Embedding model** — run `qmd pull` once to cache `embeddinggemma-300M` locally (no network needed afterwards; embeddings run on CPU by default)
+
+### Installation
+
+```bash
+pi install https://github.com/budkovsky/pi-vcc-hybrid@develop
+```
+
+Or try without installing:
+
+```bash
+pi -e https://github.com/budkovsky/pi-vcc-hybrid@develop
+```
+
+### Configuration
+
+Config lives at `~/.pi/agent/pi-vcc-config.json` (auto-scaffolded). The semantic layer is **on by default** under the `semantic` key:
+
+```json
+{
+  "semantic": {
+    "enabled": true,
+    "chunkTokens": 1500,
+    "limit": 5,
+    "mode": "vsearch",
+    "gpu": "cpu",
+    "indexName": "pi-semantic",
+    "daemonPort": 8390,
+    "keepOnShutdown": false
+  }
+}
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `true` | Master switch — off disables chunking, indexing, and `semantic_recall` |
+| `chunkTokens` | `1500` | Target chunk size (estimated tokens, chars/4). Bigger = better recall, more context per hit (see [Tuning](#tuning-phase-7b-matrix)) |
+| `limit` | `5` | Hits returned by `semantic_recall` |
+| `mode` | `"vsearch"` | `"vsearch"` = vector-only (fast); `"query"` = hybrid + rerank (slow on CPU) |
+| `gpu` | `"cpu"` | `"cpu"` sets `QMD_FORCE_CPU=1`; `"force"` allows GPU; `"auto"` lets qmd decide |
+| `indexName` | `"pi-semantic"` | Shared qmd index name |
+| `daemonPort` | `8390` | Port of the resident qmd daemon |
+| `keepOnShutdown` | `false` | `false` removes the session's vectors on quit (rebuildable; raw JSONL persists) |
+
+Env overrides (highest precedence): `PI_SEMANTIC_ENABLED`, `PI_SEMANTIC_CHUNK_TOKENS`, `PI_SEMANTIC_LIMIT`, `PI_SEMANTIC_MODE`, `PI_SEMANTIC_GPU`. Invalid values fall back to defaults with a warning.
+
+Full semantics, thresholds, and the inherited VCC config: see [Config](#config) and [Semantic Recall](#semantic-recall-vectorized-trimmed-context) below.
+
+---
+
 Inspired by [VCC](https://github.com/lllyasviel/VCC) **(View-oriented Conversation Compiler)**.
 
 ## Demo
