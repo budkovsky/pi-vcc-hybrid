@@ -60,7 +60,14 @@ writeFileSync(
       overrideDefaultCompaction: true,
       debug: false,
       globalThreshold: { compactAtTokens: THRESHOLD_TOKENS },
-      semantic: { enabled: true, chunkTokens: 1500, limit: 5, mode: "vsearch", gpu: "cpu" },
+      semantic: {
+        enabled: true,
+        // Overridable for Phase 7b tuning sanity runs (defaults = shipped defaults).
+        chunkTokens: Number(process.env.P7A_CHUNK_TOKENS ?? 1500),
+        limit: Number(process.env.P7A_LIMIT ?? 5),
+        mode: "vsearch",
+        gpu: "cpu",
+      },
     },
     null,
     2,

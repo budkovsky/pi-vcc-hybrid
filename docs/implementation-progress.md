@@ -89,12 +89,13 @@ default branch = `develop` (at `98fd534`, v0.8.8 = latest upstream). Work branch
 
 ### 7b — Tuning matrix (deferrable polish, post-DoD)
 
-- [ ] chunkTokens 1000/1500/2500 × limit 3/5/10 matrix, hit@1 table
-- [ ] Defaults finalized + documented in README
+- [x] chunkTokens 1000/1500/2500 × limit 3/5/10 matrix, hit@1 table — `scripts/tuning-matrix.ts` (LLM-free: real chunker + real qmd, CPU, throwaway index, 900-note/24-fact deterministic corpus, paraphrase query per fact, rank = disk-verified fact-chunk position in a limit=10 search; hit@L derived from the same ranked list). Evidence: `docs/validation/phase7b-evidence.md` (2026-09-10)
+- [x] Defaults finalized + documented in README — **keep `chunkTokens: 1500`, `limit: 5`** (2500 wins recall 18/24 vs 15/24 @hit@5 but each hit is 1.67× the context; 1000 strictly worse; 1500/5 proven in the 7a live run). README: new "Semantic Recall" section + `semantic` config table (2026-09-10)
+- [x] Live sanity check of the chosen defaults — `scripts/validate-phase7a.ts` re-run (now with `P7A_CHUNK_TOKENS`/`P7A_LIMIT` env overrides): all 6 items PASS at 1500/5, wall 278.8s (2026-09-10; fresh evidence in `docs/validation/phase7a-evidence.md`)
 
 ## Release / DoD
 
 - [ ] Fork's original suite green unchanged + `tests/semantic/` green
-- [ ] Spec §12 items 1–6 checked with evidence
-- [ ] README: install, config table, how recall works, CPU/GPU note, cleanup behavior
-- [ ] No new npm runtime deps (builtins + qmd only)
+- [x] Spec §12 items 1–6 checked with evidence (Phase 7a, 2026-09-10)
+- [x] README: install, config table, how recall works, CPU/GPU note, cleanup behavior (2026-09-10)
+- [x] No new npm runtime deps (builtins + qmd only)
