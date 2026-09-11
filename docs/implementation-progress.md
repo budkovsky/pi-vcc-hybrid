@@ -95,7 +95,7 @@ default branch = `develop` (at `98fd534`, v0.8.8 = latest upstream). Work branch
 
 ## Release / DoD
 
-- [ ] Fork's original suite green unchanged + `tests/semantic/` green
+- [x] Fork's original suite green unchanged + `tests/semantic/` green (2026-09-10: 603 unit + 27 regression, typecheck + knip clean)
 - [x] Spec §12 items 1–6 checked with evidence (Phase 7a, 2026-09-10)
 - [x] README: install, config table, how recall works, CPU/GPU note, cleanup behavior (2026-09-10)
 - [x] No new npm runtime deps (builtins + qmd only)
