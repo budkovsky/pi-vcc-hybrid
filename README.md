@@ -483,6 +483,39 @@ Typical workflow: **search → find relevant entry indices → expand those indi
 
 > Some tool results are truncated by Pi core at save time. `expand` returns everything in the JSONL but can't recover what Pi already cut.
 
+## Semantic Recall (Vectorized Trimmed Context)
+
+`vcc_recall` is keyword-based — if the query's wording doesn't match the trimmed content's wording, it misses. **`semantic_recall`** complements it with vector search over the trimmed span: after each compaction, the trimmed messages are chunked, embedded locally (qmd, `embeddinggemma-300M`), and indexed per session. Queries are paraphrase-tolerant:
+
+```
+semantic_recall({ query: "when does the nightly backup run" })
+// → the chunk containing "The backup cron runs at 03:15 UTC." — even though
+//   the query shares no keywords with the original text
+```
+
+### How it works
+
+- **Compaction is unchanged** (deterministic VCC, no LLM). After the summary is built, the *trimmed span* is handed to the semantic layer.
+- **Indexing is fire-and-forget**: chunks are written to `~/.pi/vector/<sessionId>/NNNN.md` and embedded in the background — it never blocks a turn, and failures are logged to `indexer.log` in the chunk dir.
+- **Recall** goes through a resident qmd daemon (`qmd mcp --http --daemon`; one shared index, one collection per session) — steady-state queries are ~30 ms. The daemon is warmed up at session start and stopped on quit (unless `keepOnShutdown`).
+- **Degraded by design**: if the index hasn't caught up or the daemon is down, the tool returns a friendly "no hits yet / indexing in progress" message instead of an error.
+
+### CPU/GPU note
+
+Embeddings run on **CPU by default** (`QMD_FORCE_CPU=1`) — the GPU path has been observed to cause CUDA OOM contention on shared machines. Set `semantic.gpu: "force"` to opt in. The one-time model load (~30–60 s cold) happens off the turn path at session start.
+
+### Tuning (Phase 7b matrix)
+
+24-query paraphrase matrix (real chunker + real qmd, 36k-token corpus — full evidence in `docs/validation/phase7b-evidence.md`):
+
+| chunkTokens | chunks | hit@1 | hit@5 | hit@10 |
+|---|---|---|---|---|
+| 1000 | 31 | 25% | 58% | 79% |
+| **1500 (default)** | 22 | 33% | 63% | 83% |
+| 2500 | 15 | 50% | 75% | 92% |
+
+Bigger chunks improve recall but each returned hit is proportionally more context (`limit × chunkTokens` tokens per call). `1500/5` is the balanced default (validated in the live end-to-end run); raise `chunkTokens` if you value recall over context cost.
+
 ## Performance
 
 pi-vcc processes 3.7 MB sessions (2,600 messages, 3,000 blocks) in **~31 ms** — no LLM calls, no I/O waits beyond reading the session JSONL. Below are the optimizations that got us there.
@@ -590,6 +623,17 @@ Config lives at `~/.pi/agent/pi-vcc-config.json` (auto-scaffolded on first load 
   - **`keepRecentTokens`** *(optional)*: advisory token budget for pi-core's default compaction. Pi-vcc's own `buildOwnCut` uses task-boundary heuristics, so this only affects pi-core's cut when `overrideDefaultCompaction` is `false`.
 - **`globalThreshold`** *(default: none)*: global threshold applied to all models not matched by `modelThresholds`. Uses `reserveTokens`, `compactAtTokens`, or `compactPercent`. If omitted, pi-core's global `compaction.reserveTokens` applies (no override).
 - **`defaultThreshold`** *(default: none, deprecated)*: use `globalThreshold` instead. Backward compatible — still works.
+- **`semantic`** *(default: enabled)*: the vectorized recall layer (see [Semantic Recall](#semantic-recall-vectorized-trimmed-context)).
+  - **`enabled`** *(default `true`)*: master switch — `false` disables chunking, indexing, and the `semantic_recall` tool.
+  - **`chunkTokens`** *(default `1500`)*: target chunk size in estimated tokens (chars/4).
+  - **`limit`** *(default `5`)*: number of hits `semantic_recall` returns by default.
+  - **`mode`** *(default `"vsearch"`)*: `"vsearch"` = vector-only (fast); `"query"` = qmd hybrid with expansion + rerank (much slower on CPU).
+  - **`gpu`** *(default `"cpu"`)*: `"cpu"` sets `QMD_FORCE_CPU=1`; `"force"` allows the GPU; `"auto"` lets qmd decide.
+  - **`indexName`** *(default `"pi-semantic"`)*: shared qmd index name (file-only key).
+  - **`daemonPort`** *(default `8390`)*: port of the resident qmd daemon (file-only key).
+  - **`keepOnShutdown`** *(default `false`)*: `false` removes the session's chunk dir + collection on quit (vectors are rebuildable; the raw JSONL persists).
+
+  Overridable via env (highest precedence): `PI_SEMANTIC_ENABLED`, `PI_SEMANTIC_CHUNK_TOKENS`, `PI_SEMANTIC_LIMIT`, `PI_SEMANTIC_MODE`, `PI_SEMANTIC_GPU`. Invalid values fall back to the default with a warning — they never throw.
 
 ### How compaction thresholds work
 

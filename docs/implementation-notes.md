@@ -483,3 +483,37 @@ the planted fact recalled through the semantic layer only.
   break a before/after count comparison.
 - **Gate:** full suite green unchanged (603 unit + 27 regression),
   typecheck + knip clean. No new deps.
+
+## Phase 7b
+
+Tuning matrix (post-DoD polish). Done 2026-09-10 on branch `feat/phase-7b-tuning`.
+
+- **`scripts/tuning-matrix.ts`** — LLM-free harness (user-approved hybrid:
+  matrix without an LLM + one final live 7a run). Real `chunkSpan` over a
+  deterministic 900-note corpus (30 services × 30 actions = unique lines;
+  24 planted facts, one paraphrase query each) → NNNN.md → real qmd
+  (CPU, throwaway index, one daemon, three collections) → limit=10 search
+  per fact → rank of the fact's chunk (disk-verified tokens). hit@L is
+  derived from the same ranked list, so one query per (config, fact)
+  covers all limits.
+- **Corpus gotcha (why v1 of the harness was wrong):** the first corpus
+  repeated 20 topics 45× — every chunk was ~97% identical boilerplate and
+  the planted fact line got diluted to rank 18–20+. Real sessions are
+  diverse; the harness must be too. Unique-line filler fixed it (ranks
+  1–10, deterministic across runs).
+- **qmd caps a search at 20 hits** regardless of the requested limit
+  (limit=33 → 20 returned). Irrelevant for the matrix (limit ≤ 10) but
+  pinned here so nobody is surprised.
+- **Result (24 queries):** hit@5 — 1000: 14/24, 1500: 15/24, 2500: 18/24;
+  hit@10 — 19/20/22. Bigger chunks win recall (partly corpus coverage:
+  top-10 of 15 chunks = 67% of the index) but each returned hit is
+  `limit × chunkTokens` tokens of context. **Decision (user-approved):
+  keep defaults `chunkTokens: 1500`, `limit: 5`** — balanced point, and the
+  config proven end-to-end in 7a.
+- **Live sanity check:** `validate-phase7a.ts` re-run at 1500/5 (new
+  `P7A_CHUNK_TOKENS`/`P7A_LIMIT` env overrides) — all 6 items PASS,
+  wall 278.8s. Fresh evidence overwrote `docs/validation/phase7a-evidence.md`.
+- **README:** new "Semantic Recall (Vectorized Trimmed Context)" section
+  (how it works, CPU/GPU note, tuning table) + `semantic` config table with
+  env overrides.
+- **Gate:** full suite green, typecheck + knip clean. No new deps.
